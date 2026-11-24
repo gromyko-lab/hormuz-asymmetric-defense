@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>HORMUZ: Asymmetric Defense</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage">
+  <canvas id="game"></canvas>
+
+  <div id="hudButtons">
+    <button id="btnNext" class="hbtn accent hidden">NEXT WAVE NOW<small>+$0.5M early bonus</small></button>
+    <button id="btnPause" class="hbtn" title="Pause (P)">II</button>
+    <button id="btnMute" class="hbtn" title="Mute (M)">SOUND ON</button>
+  </div>
+
+  <div id="panel" class="panel hidden"></div>
+
+  <div id="pauseOverlay" class="overlay dim hidden">
+    <div class="box small">
+      <h2>PAUSED</h2>
+      <p class="tag">Press P or click resume.</p>
+      <button id="btnResume" class="big">RESUME</button>
+    </div>
+  </div>
+
+  <div id="overlay" class="overlay">
+    <div class="box start">
+      <div class="kicker">COASTAL AIR DEFENSE COMMAND · SECTOR 7</div>
+      <h1>HORMUZ</h1>
+      <h2>ASYMMETRIC DEFENSE</h2>
+      <p class="tag">Every interceptor costs real money. The enemy is betting you go broke first.</p>
+      <ul class="how">
+        <li><b>Deploy.</b> Click a concrete pad on your coast to build a <em>CIWS</em> (cheap drone killer), a <em>Patriot</em> (kills anything, $4M a shot) or a <em>HIMARS</em>.</li>
+        <li><b>Control the burn.</b> Click a Patriot to switch <em>AUTO</em> &harr; <em>HEAVY ONLY</em>, so it doesn't fire $4M missiles at $20K drones and $5K decoys.</li>
+        <li><b>Hunt launchers.</b> When an enemy launcher fires, it shows a red ping for 10&nbsp;s. Click it to send a HIMARS salvo. About 3 salvos kill a launcher: $3M bounty and smaller waves.</li>
+      </ul>
+      <div class="rules">Win: survive 10 waves or destroy all 5 launchers. Lose: all 3 coastal buildings fall, or debt goes past &minus;$20M.</div>
+      <button id="btnStart" class="big">BEGIN DEFENSE</button>
+      <div class="keys">M mute &middot; P pause &middot; N next wave &middot; Esc close menu</div>
+    </div>
+  </div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
