@@ -7,9 +7,12 @@ A 2D tactical browser game about the economics of air defense: a mix of missile 
 ## How to play
 - **Deploy.** Click a concrete pad on your coast to build a CIWS (cheap drone killer), a Patriot battery (kills anything, $4M a shot) or a HIMARS truck.
 - **Control the burn.** Click a Patriot to switch between AUTO (all threats) and HEAVY ONLY, so it doesn't fire $4M missiles at $20K drones and $5K decoys.
-- **Hunt launchers.** When an enemy launcher fires, it shows a red ping for 10 seconds. Click it to send a HIMARS salvo. About 3 salvos destroy a launcher, which pays a $3M bounty and shrinks future waves.
+- **Hit back.** When an enemy launcher fires, it shows a red ping for 10 seconds. Click it for a HIMARS salvo, or select your aircraft carrier and click it to send an F-35 precision strike ($7M). Orange pings are underground missile bases: only an F-35 bunker buster ($20M) can destroy them, and each one destroyed cuts ballistic missiles for the rest of the war.
 
 **Win:** survive 10 waves, or destroy all 5 launchers.
 **Lose:** all 3 coastal buildings are destroyed, or your debt goes past −$20M.
 
-Keys: `M` mute · `P` pause · `N` next wave · `Esc` close menu
+## AI demo mode
+Click **WATCH AI DEMO** on the title screen (it also starts by itself after 25 seconds). An AI commander plays real games with a visible cursor. It builds defenses, fixes its own mistakes, hunts launchers with HIMARS and F-35s, and drops bunker busters, while a camera director cuts to the best moments. Each game uses a different strategy (Balanced, Hunter or Shield), then the next game starts. Press **PLAY THE GAME** to take over, or `Esc` to go back to the title.
+
+Keys: `M` mute · `P` pause · `N` next wave · `Esc` close menu or leave the demo

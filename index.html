@@ -26,6 +26,17 @@
     </div>
   </div>
 
+  <div id="demoUI" class="hidden">
+    <div id="demoBar">
+      <button id="demoPlay" class="hbtn play">&#9654; PLAY THE GAME</button>
+      <button id="demoSound" class="hbtn">CLICK FOR SOUND</button>
+      <button id="demoFull" class="hbtn">FULLSCREEN</button>
+      <button id="demoExit" class="hbtn" title="Back to title (Esc)">&#10005;</button>
+    </div>
+    <div id="demoCaption"></div>
+    <div id="demoCursor"><svg width="22" height="26" viewBox="0 0 22 26"><path d="M1 1 L1 20 L6 15.5 L9.5 24 L13 22.5 L9.6 14.2 L16 14 Z" fill="#fff" stroke="#0a1622" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+  </div>
+
   <div id="overlay" class="overlay">
     <div class="box start">
       <div class="kicker">COASTAL AIR DEFENSE COMMAND · SECTOR 7</div>
@@ -35,11 +46,11 @@
       <ul class="how">
         <li><b>Deploy.</b> Click a concrete pad on your coast to build a <em>CIWS</em> (cheap drone killer), a <em>Patriot</em> (kills anything, $4M a shot) or a <em>HIMARS</em>.</li>
         <li><b>Control the burn.</b> Click a Patriot to switch <em>AUTO</em> &harr; <em>HEAVY ONLY</em>, so it doesn't fire $4M missiles at $20K drones and $5K decoys.</li>
-        <li><b>Hunt launchers.</b> When an enemy launcher fires, it shows a red ping for 10&nbsp;s. Click it to send a HIMARS salvo. About 3 salvos kill a launcher: $3M bounty and smaller waves.</li>
+        <li><b>Hit back.</b> A firing launcher shows a red ping for 10&nbsp;s: click it for a <em>HIMARS</em> salvo, or select your <em>carrier</em> to send an <em>F-35</em>. Orange pings are underground missile bases, which only an F-35 <em>bunker buster</em> can destroy.</li>
       </ul>
       <div class="rules">Win: survive 10 waves or destroy all 5 launchers. Lose: all 3 coastal buildings fall, or debt goes past &minus;$20M.</div>
-      <button id="btnStart" class="big">BEGIN DEFENSE</button>
-      <div class="keys">M mute &middot; P pause &middot; N next wave &middot; Esc close menu</div>
+      <div class="btnrow"><button id="btnStart" class="big">BEGIN DEFENSE</button><button id="btnDemo" class="big ghost">WATCH AI DEMO</button></div>
+      <div class="keys">M mute &middot; P pause &middot; N next wave &middot; Esc close menu &middot; the AI demo starts by itself after 25&nbsp;s</div>
     </div>
   </div>
 </div>

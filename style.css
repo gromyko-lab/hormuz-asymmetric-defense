@@ -106,3 +106,28 @@ html, body {
 .grade { font-size: 13px; color: #9fb8c6; margin-bottom: 8px; }
 .grade b { font-size: 22px; color: #fff; margin: 0 6px; }
 .insight { font-size: 13px; color: #ffc04d; line-height: 1.45; margin-bottom: 14px; }
+
+/* ---------- Title buttons ---------- */
+.btnrow { display: flex; gap: 12px; justify-content: center; }
+.big.ghost { background: transparent; color: #8fdcff; border: 1px solid #5ad2ff; box-shadow: none; }
+.big.ghost:hover { background: rgba(90, 210, 255, 0.12); }
+
+/* ---------- AI demo ---------- */
+#demoUI { position: absolute; inset: 0; pointer-events: none; z-index: 7; }
+#demoBar { position: absolute; top: 8px; right: 10px; display: flex; gap: 6px; pointer-events: auto; }
+.hbtn.play { background: linear-gradient(180deg, #7fe3ff, #39b8e6); color: #031019; border: none; }
+#demoCaption {
+  position: absolute; left: 50%; bottom: 0; height: 48px; width: 1180px; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; opacity: 0;
+}
+#demoCaption.show { animation: capIn 0.45s ease-out forwards; }
+@keyframes capIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+#demoCaption b { font-size: 11px; letter-spacing: 3px; color: #5ad2ff; }
+#demoCaption b.red { color: #ff6b5a; } #demoCaption b.amb { color: #ffc04d; } #demoCaption b.grn { color: #7cffb2; }
+#demoCaption span { font-size: 15px; color: #e8f4fb; margin-top: 2px; }
+#demoCursor { position: absolute; left: 0; top: 0; width: 22px; height: 26px; opacity: 0; transition: opacity 0.25s; }
+#demoCursor.vis { opacity: 1; }
+#demoCursor svg { display: block; filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.7)); }
+#demoCursor::after { content: ''; position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%; border: 2px solid #8fdcff; opacity: 0; }
+#demoCursor.click::after { animation: clk 0.45s ease-out; }
+@keyframes clk { from { opacity: 1; transform: scale(0.3); } to { opacity: 0; transform: scale(1.5); } }

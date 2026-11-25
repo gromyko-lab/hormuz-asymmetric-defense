@@ -33,7 +33,7 @@ const UNIT = {
   himars: {
     name: 'HIMARS TRUCK', short: 'HIMARS', build: 6e6, shot: 1.5e6, hp: 70,
     tag: 'Hunts enemy launchers', ammo: 'per 6-rocket salvo',
-    role: 'Select it, then click a red-pinged enemy launcher. Each launcher takes about 3 salvos. A kill pays a $3M bounty and shrinks future waves.',
+    role: 'Select it, then click a red-pinged enemy launcher. Each launcher takes 3 to 4 salvos, fewer if an F-35 hits it too. A kill pays a $3M bounty and shrinks future waves.',
   },
 };
 
@@ -57,6 +57,8 @@ const WAVES = [
   { d: 32, x: 16, c: 5, b: 5 },
   { d: 40, x: 20, c: 6, b: 6 },
 ];
+
+const AIR = { jets: 2, rearm: 20, strikeCost: 7e6, busterCost: 20e6, strikeDmg: 6, bunkerBounty: 5e6, bunkers: 3 };
 
 const PADS = [{ x: 92, y: 630 }, { x: 192, y: 630 }, { x: 476, y: 630 }, { x: 800, y: 630 }, { x: 1108, y: 630 }, { x: 1208, y: 630 }];
 const PT_TUBES = [[-6.5, -15], [6.5, -15], [-6.5, -2], [6.5, -2]];
@@ -122,6 +124,10 @@ const SFX = (() => {
   return {
     init,
     get muted() { return muted; },
+    get ready() { return !!ac && ac.state === 'running'; },
+    jet() { if (!can('jet', 0.6)) return; const t = ac.currentTime; noise(t, 2.4, 'bandpass', 260, 1500, 0.7, 0.32, 0.35); noise(t, 2.2, 'lowpass', 500, 120, 0.6, 0.28, 0.3); },
+    whistle() { if (can('wh', 0.3)) tone(ac.currentTime, 0.9, 'sine', 1500, 420, 0.05, 0.08); },
+    thud() { if (!can('thud', 0.2)) return; const t = ac.currentTime; tone(t, 0.6, 'sine', 70, 22, 0.9); noise(t, 0.35, 'lowpass', 400, 60, 0.6, 0.45); },
     setMuted(m) { muted = m; if (out) out.gain.setTargetAtTime(m ? 0 : 0.7, ac.currentTime, 0.02); },
     ciws() {
       if (!can('ciws', 0.11)) return;
@@ -316,9 +322,11 @@ function newState() {
     incomeT: 0, steamT: 0,
     threats: [], missiles: [], rockets: [], fires: [], scorches: [], popups: [], timers: [],
     pads: [null, null, null, null, null, null], launchers: [], buildings: [], banner: null,
+    bunkers: [], jets: [], bombs: [], demo: false, carrier: { type: 'carrier', x: 300, y: 496, slots: [] },
     result: null, loseQueued: false, waveStart: { your: 0, enemy: 0 },
     stats: {
       your: 0, enemy: 0, build: 0, patriot: 0, ciws: 0, himars: 0, income: 0, bounty: 0, bonus: 0,
+      air: 0, strikes: 0, busters: 0, bunkersKilled: 0,
       patriotShots: 0, patriotWaste: 0, ciwsBursts: 0, salvos: 0, hits: 0, launchersKilled: 0,
       launched: { drone: 0, decoy: 0, cruise: 0, ballistic: 0 }, killed: { drone: 0, decoy: 0, cruise: 0, ballistic: 0 },
     },
@@ -331,7 +339,9 @@ function newState() {
   };
   for (let i = 0; i < 70; i++) s.dashes.push({ x: rand(0, W), y: rand(175, 545), len: rand(8, 26), spd: rand(4, 10), ph: rand(0, TAU) });
   s.buildings = [makePower(), makeCity(), makeRefinery()];
-  for (let i = 0; i < CFG.launchers; i++) { const L = { id: i, hp: 12, max: 12, alive: true, revealed: false, revealT: 0, gen: 0, pingT: 0, x: 0, y: 0, rot: 0, fade: 0 }; s.launchers.push(L); }
+  for (let i = 0; i < CFG.launchers; i++) { const L = { kind: 'launcher', id: i, hp: 14, max: 14, alive: true, revealed: false, revealT: 0, gen: 0, pingT: 0, x: 0, y: 0, rot: 0, fade: 0 }; s.launchers.push(L); }
+  for (let i = 0; i < AIR.jets; i++) s.carrier.slots.push({ state: 'ready', t: 0 });
+  for (let i = 0; i < AIR.bunkers; i++) s.bunkers.push({ kind: 'bunker', id: i, alive: true, known: false, revealed: false, revealT: 0, pingT: 0, fade: 0, x: 0, y: 0, gen: 0 });
   return s;
 }
 
@@ -617,6 +627,7 @@ function tankBlast(x, y) {
 function destroyBuilding(b) {
   banner(`${b.name} DESTROYED`, `Lost ${money(b.income)} income every 5 seconds`, '#ff4d4d', 3);
   flashA = Math.max(flashA, 0.3); slowmo(0.5);
+  demoEvent(b.x, b.y - 20, 1.6, 3, 8);
   for (let i = 0; i < 6; i++) later(i * 0.22, () => explode(b.x + rand(-b.w * 0.4, b.w * 0.4), b.y + rand(-b.h * 0.35, b.h * 0.35), rand(2.2, 3.4)));
   for (const f of b.fires) f.int = 1.6;
   if (b.fires.length < 4) for (let i = b.fires.length; i < 4; i++) b.fires.push(addFire(b.x + rand(-b.w * 0.35, b.w * 0.35), b.y + rand(-b.h * 0.3, b.h * 0.3), 1.3));
@@ -778,7 +789,7 @@ function firePatriot(u, t, manual) {
   spend(UNIT.patriot.shot, 'patriot'); S.stats.patriotShots++;
   if (t.type === 'drone' || t.type === 'decoy') {
     S.stats.patriotWaste++;
-    if (!S.warnedWaste && !manual) { S.warnedWaste = true; later(0.6, () => banner('\u26A0 $4M PATRIOT FIRED AT A ' + (t.type === 'decoy' ? '$5K DECOY' : '$20K DRONE'), 'Click the Patriot and switch it to HEAVY ONLY. Let CIWS handle drones.', '#ffb347', 4.5)); }
+    if (!S.warnedWaste && !manual && !S.demo) { S.warnedWaste = true; later(0.6, () => banner('\u26A0 $4M PATRIOT FIRED AT A ' + (t.type === 'decoy' ? '$5K DECOY' : '$20K DRONE'), 'Click the Patriot and switch it to HEAVY ONLY. Let CIWS handle drones.', '#ffb347', 4.5)); }
   }
   t.engaged++; t.spent += UNIT.patriot.shot;
   S.missiles.push({ x, y, z: 0, zT: 0, speed: 70, dir: -Math.PI / 2, target: t, phase: 'boost', t: 0, acc: 0, lost: 0, mode: manual ? 'manual' : u.mode, dead: false });
@@ -944,7 +955,8 @@ function spawnThreat(type, L) {
   }
   S.threats.push(t);
   S.stats.enemy += T.cost; S.stats.launched[type]++;
-  revealLauncher(L);
+  revealSource(L);
+  if (type === 'ballistic') sayOnce('bal', 'BALLISTIC MISSILE LAUNCH', 'Fast, $500K, and only a Patriot can stop it. The red circle marks where it will hit.', 'red');
   light(L.x, L.y, type === 'ballistic' ? 70 : 28, 0.3, 0.85);
   for (let k = 0; k < 4; k++) puff(L.x + rand(-6, 6), L.y + rand(-4, 4), { spr: SPR.dust, s0: 4, s1: rand(12, 20), a0: 0.4, life: rand(1.4, 2.4), vx: rand(-20, 20), vy: rand(-12, 6) });
 }
@@ -1034,7 +1046,7 @@ function killThreat(t, by) {
 function placeLauncher(L) {
   for (let tries = 0; tries < 40; tries++) {
     const x = rand(50, W - 50);
-    if (S.launchers.every((o) => o === L || !o.alive || Math.abs(o.x - x) > 110)) { L.x = x; break; }
+    if (S.launchers.every((o) => o === L || !o.alive || Math.abs(o.x - x) > 110) && S.bunkers.every((b) => Math.abs(b.x - x) > 70)) { L.x = x; break; }
     L.x = x;
   }
   L.y = Math.max(HUD_H + 30, enemyShore(L.x) - rand(28, 70));
@@ -1063,6 +1075,7 @@ function destroyLauncher(L) {
   SFX.cash();
   const left = S.launchers.filter((l) => l.alive).length;
   banner('LAUNCHER DESTROYED', left ? `${left} mobile launcher${left > 1 ? 's' : ''} left. Future waves are smaller.` : 'All enemy launchers neutralized', '#7cffb2', 2.6);
+  demoEvent(L.x, L.y + 40, 1.7, 2.8, 8);
   if (!left) later(2.2, () => endGame(true, 'All five enemy launchers destroyed. The strait is open.'));
 }
 
@@ -1079,7 +1092,8 @@ function buildWave(n) {
   const salvos = [];
   while (lightList.length) salvos.push(lightList.splice(0, Math.min(lightList.length, randi(3, 6))));
   let c = cnt(d.c); while (c > 0) { const k = Math.min(c, randi(1, 2)); salvos.push(Array(k).fill('cruise')); c -= k; }
-  let b = cnt(d.b); while (b > 0) { const k = Math.min(b, randi(1, 2)); salvos.push(Array(k).fill('ballistic')); b -= k; }
+  const bf = 0.25 + 0.75 * S.bunkers.filter((x) => x.alive).length / AIR.bunkers;
+  let b = d.b > 0 ? Math.max(1, Math.round(d.b * f * bf)) : 0; while (b > 0) { const k = Math.min(b, randi(1, 2)); salvos.push(Array(k).fill('ballistic')); b -= k; }
   const first = salvos.shift(); shuffle(salvos); salvos.unshift(first);
   const gap = lerp(4.6, 2.3, (n - 1) / 9);
   const q = []; let t = 1.0;
@@ -1095,11 +1109,16 @@ function startWave(n) {
   S.queue = buildWave(n);
   S.waveStart = { your: S.stats.your, enemy: S.stats.enemy };
   banner(`WAVE ${n} / 10`, n === 10 ? 'FINAL ASSAULT' : 'Hostile launches detected', '#ff6b5a', 2.4);
+  if (S.demo) {
+    const fl = { 1: 'Shahed drones and decoys. Cheap for them, expensive for us if we pick the wrong weapon.', 3: 'Cruise missiles join the drone swarms.', 4: 'First ballistic missiles expected from underground bases.', 10: 'Final assault. Everything they have left.' };
+    say(`WAVE ${n} / 10`, fl[n] || `${S.queue.length} inbound threats from ${S.launchers.filter((l) => l.alive).length} mobile launchers.`, n >= 4 ? 'red' : '');
+  }
   refreshButtons();
 }
 function spawnFromQueue() {
   while (S.queue.length && S.queue[0].t <= S.waveT) {
     const it = S.queue.shift();
+    if (it.type === 'ballistic') { const bs = S.bunkers.filter((x) => x.alive); if (bs.length) { spawnThreat('ballistic', pick(bs)); continue; } }
     let L = S.salvoL[it.salvo];
     if (!L || !L.alive) {
       const alive = S.launchers.filter((l) => l.alive);
@@ -1144,6 +1163,13 @@ function checkLose() {
 }
 function endGame(win, reason) {
   if (S.mode === 'over') return;
+  if (S.demo) {
+    S.mode = 'over'; S.queue = []; S.result = { win, reason }; closePanel(); D.actions = []; D.act = null;
+    banner(win ? 'VICTORY' : 'DEFEAT', reason, win ? '#7cffb2' : '#ff4d4d', 3.5);
+    D.endT = 11;
+    later(2.5, () => { const st = S.stats; const r = st.enemy ? (st.your / st.enemy).toFixed(1) : '\u2014'; say(win ? 'VICTORY' : 'DEFEAT', `Defense spent ${money(st.your)} vs attacker ${money(st.enemy)} (${r} : 1). Next game starting...`, win ? 'grn' : 'red'); });
+    return;
+  }
   S.mode = 'over'; S.queue = []; S.result = { win, reason };
   closePanel();
   banner(win ? 'VICTORY' : 'DEFEAT', reason, win ? '#7cffb2' : '#ff4d4d', 3);
@@ -1220,6 +1246,11 @@ function refreshPanel() {
     elPanel.querySelectorAll('.card').forEach((c) => c.classList.toggle('off', S.treasury < UNIT[c.dataset.unit].build));
     return;
   }
+  if (ui.panel.kind === 'carrier') {
+    const el = document.getElementById('c-ready');
+    if (el) { const re = S.carrier.slots.filter((x) => x.state === 'rearm').map((x) => Math.ceil(x.t)); el.textContent = `${jetsReady()} / ${AIR.jets}` + (re.length ? `  (rearm ${Math.min(...re)}s)` : ''); }
+    return;
+  }
   const u = ui.panel.u;
   const hp = document.getElementById('u-hp'), bar = document.getElementById('u-hpbar');
   if (hp) hp.textContent = `${Math.max(0, Math.round(u.hp))} / ${u.max}`;
@@ -1275,13 +1306,19 @@ btnNext.addEventListener('click', () => { SFX.init(); nextWaveNow(); });
 btnPause.addEventListener('click', () => { SFX.click(); togglePause(); });
 btnMute.addEventListener('click', () => { SFX.init(); toggleMute(); });
 document.getElementById('btnResume').addEventListener('click', () => togglePause(false));
-document.getElementById('btnStart').addEventListener('click', () => { SFX.init(); SFX.click(); startGame(); });
+elOverlay.addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.id === 'btnStart' || b.id === 'btnAgain') { SFX.init(); SFX.click(); startGame(); }
+  else if (b.id === 'btnDemo') startDemo();
+});
 for (const el of [btnNext, btnPause, btnMute]) el.addEventListener('pointerdown', (e) => e.stopPropagation());
 
 function startGame() {
   S = newState();
   parts = [];
+  placeBunkers();
   for (const L of S.launchers) placeLauncher(L);
+  camReset();
   S.mode = 'prep'; S.prepT = CFG.firstPrep;
   elOverlay.classList.add('hidden'); elPause.classList.add('hidden');
   closePanel(); refreshButtons();
@@ -1316,6 +1353,7 @@ function showReport() {
         ${row(`Patriot interceptors ×${s.patriotShots}`, money(s.patriot))}
         ${row(`CIWS bursts ×${s.ciwsBursts}`, money(s.ciws))}
         ${row(`HIMARS salvos ×${s.salvos}`, money(s.himars))}
+        ${row(`F-35 sorties ×${s.strikes + s.busters}`, money(s.air))}
         ${row('Income earned', '<span class="grn">+' + money(s.income) + '</span>')}
         ${row('Bounties &amp; bonuses', '<span class="grn">+' + money(s.bounty + s.bonus) + '</span>')}
       </table></div>
@@ -1325,15 +1363,464 @@ function showReport() {
         ${thr('cruise', 'Cruise ($800K)')}
         ${thr('ballistic', 'Ballistic ($500K)')}
         ${row('Launchers destroyed', `${s.launchersKilled} / ${CFG.launchers}`)}
+        ${row('Underground bases destroyed', `${s.bunkersKilled} / ${AIR.bunkers}`)}
         ${row('Hits on infrastructure', s.hits)}
       </table></div>
     </div>
     <div class="grade">GRADE<b>${grade}</b>· Waves survived ${waves} / 10 · Infrastructure intact ${infra}%</div>
     <p class="insight">${insight}</p>
-    <button id="btnAgain" class="big">PLAY AGAIN</button>
+    <div class="btnrow"><button id="btnAgain" class="big">PLAY AGAIN</button><button id="btnDemo" class="big ghost">WATCH AI DEMO</button></div>
   </div>`;
   elOverlay.classList.remove('hidden');
-  document.getElementById('btnAgain').addEventListener('click', () => { SFX.click(); startGame(); });
+}
+
+// ============================== AIR WING: CARRIER, F-35, BUNKERS ==============================
+const F35 = [[15, 0], [8, 1.8], [4, 2.6], [-1, 9.5], [-5, 9.5], [-6, 3.6], [-9, 3.6], [-12.5, 7], [-15, 7], [-14, 2], [-15, 1.2], [-15, -1.2], [-14, -2], [-15, -7], [-12.5, -7], [-9, -3.6], [-6, -3.6], [-5, -9.5], [-1, -9.5], [4, -2.6], [8, -1.8]];
+const CV_HULL = [[-86, -14], [58, -16], [78, -10], [90, 0], [78, 10], [58, 16], [-86, 15]];
+const CV_ANGLED = [[-86, -14], [-70, -22], [-6, -23], [10, -15]];
+
+function drawF35(g, x, y, ang, s, alpha = 1, shadow = false) {
+  g.save(); g.translate(x, y); g.rotate(ang); g.globalAlpha = alpha;
+  pathShape(g, F35, s);
+  if (shadow) { g.fillStyle = 'rgba(0,0,0,0.3)'; g.fill(); g.restore(); return; }
+  g.fillStyle = '#7d868d'; g.fill(); g.strokeStyle = '#262c31'; g.lineWidth = 0.8; g.stroke();
+  g.strokeStyle = '#3a4248'; g.lineWidth = 1.2; g.beginPath();
+  g.moveTo(-9 * s, 2.6 * s); g.lineTo(-12 * s, 3.8 * s); g.moveTo(-9 * s, -2.6 * s); g.lineTo(-12 * s, -3.8 * s); g.stroke();
+  g.fillStyle = 'rgba(214,170,70,0.85)'; g.beginPath(); g.ellipse(7 * s, 0, 2.8 * s, 1.1 * s, 0, 0, TAU); g.fill();
+  g.restore();
+}
+function drawCarrier() {
+  const c = S.carrier;
+  ctx.save(); ctx.translate(c.x, c.y);
+  ctx.strokeStyle = 'rgba(200,230,245,0.13)'; ctx.lineWidth = 1.4;
+  for (let i = 1; i <= 3; i++) { ctx.beginPath(); ctx.moveTo(-86, -8); ctx.lineTo(-86 - 44 * i, -10 - 7 * i); ctx.moveTo(-86, 8); ctx.lineTo(-86 - 44 * i, 10 + 7 * i); ctx.stroke(); }
+  ctx.save(); ctx.translate(5, 6); ctx.fillStyle = 'rgba(0,0,0,0.4)'; pathShape(ctx, CV_HULL, 1); ctx.fill(); pathShape(ctx, CV_ANGLED, 1); ctx.fill(); ctx.restore();
+  ctx.fillStyle = '#353c43'; pathShape(ctx, CV_HULL, 1); ctx.fill(); pathShape(ctx, CV_ANGLED, 1); ctx.fill();
+  ctx.fillStyle = '#464e56'; pathShape(ctx, CV_HULL, 0.96); ctx.fill(); pathShape(ctx, CV_ANGLED, 0.96); ctx.fill();
+  ctx.setLineDash([6, 5]); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-80, -6); ctx.lineTo(4, -19); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.beginPath(); ctx.moveTo(-80, 3); ctx.lineTo(84, 3); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = 'rgba(255,220,120,0.45)'; ctx.beginPath(); ctx.moveTo(22, -4); ctx.lineTo(86, -4); ctx.moveTo(26, 6); ctx.lineTo(82, 6); ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(-34, 8, 13, 7); ctx.fillRect(40, -14, 12, 7);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(14, 10, 26, 8);
+  ctx.fillStyle = '#5d666e'; ctx.fillRect(10, 7, 24, 8); ctx.fillStyle = '#79828a'; ctx.fillRect(13, 8, 9, 5);
+  ctx.fillStyle = '#aab2b8'; circle(ctx, 28, 11, 2.2);
+  const spots = [[-58, 9], [-42, 9], [-26, 9]];
+  c.slots.forEach((s, i) => { if (s.state !== 'flying') drawF35(ctx, spots[i][0], spots[i][1], -2.6, 0.62, s.state === 'rearm' ? 0.45 : 1); });
+  ctx.restore();
+}
+function drawJets() { for (const j of S.jets) drawF35(ctx, j.sx, j.sy, j.ang, 1.05 + j.z / 500); }
+
+function jetsReady() { return S.carrier.slots.filter((s) => s.state === 'ready').length; }
+function launchStrike(target, weapon) {
+  const slot = S.carrier.slots.find((s) => s.state === 'ready');
+  if (!slot) return false;
+  const c = S.carrier;
+  slot.state = 'flying';
+  spend(weapon === 'bunker' ? AIR.busterCost : AIR.strikeCost, 'air');
+  if (weapon === 'bunker') S.stats.busters++; else S.stats.strikes++;
+  const j = { slot, weapon, target, gen: target.gen, tx: target.x, ty: target.y, x: c.x - 48, y: c.y - 4, z: 0, ang: 0, spd: 10, phase: 'cat', t: 0, acc: 0, dropped: false, done: false };
+  j.sx = j.x; j.sy = j.y;
+  S.jets.push(j);
+  for (let k = 0; k < 10; k++) puff(c.x - 48 + k * 8, c.y - 4, { spr: SPR.steam, s0: 3, s1: 12, a0: 0.45, life: rand(1, 1.6), vx: rand(-10, 10), vy: rand(-8, 4) });
+  SFX.jet();
+  popup(c.x, c.y - 52, weapon === 'bunker' ? `F-35 BUNKER BUSTER  -${money(AIR.busterCost, true)}` : `F-35 STRIKE  -${money(AIR.strikeCost, true)}`, '#8fdcff', 12);
+  return true;
+}
+function updJets(dt) {
+  const c = S.carrier;
+  for (const j of S.jets) {
+    j.t += dt;
+    const T = j.target;
+    if (j.phase === 'cat') {
+      j.spd = Math.min(280, j.spd + 300 * dt); j.x += j.spd * dt;
+      if (j.x > c.x + 90) j.phase = 'climb';
+    } else if (j.phase === 'land') {
+      j.spd = Math.max(0, j.spd - 300 * dt); j.ang = turnToward(j.ang, 0, 3 * dt);
+      j.x += Math.cos(j.ang) * j.spd * dt; j.y += (c.y - 4 - j.y) * Math.min(1, dt * 4); j.z = Math.max(0, j.z - 50 * dt);
+      if (j.spd <= 0) { j.done = true; j.slot.state = 'rearm'; j.slot.t = AIR.rearm; }
+    } else if (j.phase === 'final') {
+      const B = j.path;
+      B.u = Math.min(1, B.u + j.spd * dt / B.len);
+      const u = B.u, iu = 1 - u;
+      const bx = iu * iu * iu * B.p[0][0] + 3 * iu * iu * u * B.p[1][0] + 3 * iu * u * u * B.p[2][0] + u * u * u * B.p[3][0];
+      const by = iu * iu * iu * B.p[0][1] + 3 * iu * iu * u * B.p[1][1] + 3 * iu * u * u * B.p[2][1] + u * u * u * B.p[3][1];
+      const dx = 3 * iu * iu * (B.p[1][0] - B.p[0][0]) + 6 * iu * u * (B.p[2][0] - B.p[1][0]) + 3 * u * u * (B.p[3][0] - B.p[2][0]);
+      const dy = 3 * iu * iu * (B.p[1][1] - B.p[0][1]) + 6 * iu * u * (B.p[2][1] - B.p[1][1]) + 3 * u * u * (B.p[3][1] - B.p[2][1]);
+      j.x = bx; j.y = by; if (dx || dy) j.ang = Math.atan2(dy, dx);
+      j.spd += (180 - j.spd) * Math.min(1, dt * 1.2);
+      j.z += (14 - j.z) * Math.min(1, dt * 1.4);
+      if (u >= 1) { j.phase = 'land'; j.ang = 0; }
+    } else {
+      if (!j.dropped && T.alive && T.gen === j.gen) { j.tx = T.x; j.ty = T.y; }
+      let gx = j.tx, gy = j.ty;
+      if (j.phase === 'egress') { gx = c.x - 40; gy = c.y - 150; }
+      const da = Math.atan2(gy - j.y, gx - j.x);
+      j.ang = turnToward(j.ang, da, 2.1 * dt);
+      j.spd += (310 - j.spd) * Math.min(1, dt * 1.6);
+      j.x += Math.cos(j.ang) * j.spd * dt; j.y += Math.sin(j.ang) * j.spd * dt;
+      j.z += (78 - j.z) * Math.min(1, dt * 1.2);
+      const d = dist(j.x, j.y, gx, gy);
+      if (j.phase === 'climb' && j.t > 1.3) j.phase = 'ingress';
+      if (j.phase === 'ingress' && !j.dropped) { if ((d < 140 && Math.abs(angDiff(j.ang, da)) < 0.45) || j.t > 16) dropBombs(j); }
+      else if (j.phase === 'egress' && d < 190) {
+        const p = [[j.x, j.y], [j.x + Math.cos(j.ang) * 170, j.y + Math.sin(j.ang) * 170], [c.x - 200, c.y - 4], [c.x - 90, c.y - 4]];
+        let len = 0, px = p[0][0], py = p[0][1];
+        for (let i = 1; i <= 12; i++) { const u = i / 12, iu = 1 - u; const qx = iu * iu * iu * p[0][0] + 3 * iu * iu * u * p[1][0] + 3 * iu * u * u * p[2][0] + u * u * u * p[3][0], qy = iu * iu * iu * p[0][1] + 3 * iu * iu * u * p[1][1] + 3 * iu * u * u * p[2][1] + u * u * u * p[3][1]; len += Math.hypot(qx - px, qy - py); px = qx; py = qy; }
+        j.path = { p, len: Math.max(60, len), u: 0 }; j.phase = 'final';
+      }
+    }
+    j.ang = Math.atan2(Math.sin(j.ang), Math.cos(j.ang));
+    j.sx = j.x; j.sy = j.y - j.z;
+    j.acc += dt;
+    while (j.acc > 0.03) {
+      j.acc -= 0.03;
+      if (j.z > 45) for (const sg of [-1, 1]) {
+        const a = j.ang + sg * Math.PI / 2;
+        P({ k: 'soft', spr: SPR.smoke, x: j.sx + Math.cos(a) * 9 - Math.cos(j.ang) * 4, y: j.sy + Math.sin(a) * 9 - Math.sin(j.ang) * 4, vx: rand(-2, 2), vy: rand(-2, 2), wind: 2, life: 1.3, s0: 1.2, s1: 5, a0: 0.28 });
+      }
+      if (j.phase === 'cat' || j.phase === 'climb') P({ k: 'soft', spr: SPR.grey, x: j.sx - Math.cos(j.ang) * 15, y: j.sy - Math.sin(j.ang) * 15, vx: rand(-8, 8), vy: rand(-8, 8), wind: 4, drag: 0.8, life: rand(0.8, 1.3), s0: 3, s1: 12, a0: 0.3, fadeIn: true });
+    }
+  }
+  S.jets = S.jets.filter((j) => !j.done);
+  for (const s of c.slots) if (s.state === 'rearm') { s.t -= dt; if (s.t <= 0) { s.state = 'ready'; popup(c.x, c.y - 52, 'F-35 REARMED', '#7cffb2', 11); } }
+}
+function dropBombs(j) {
+  j.dropped = true; j.phase = 'egress';
+  const base = { x0: j.x, y0: j.y, z0: j.z, T: 0, target: j.target, gen: j.gen, x: j.x, y: j.y, z: j.z, sx: j.sx, sy: j.sy, ang: j.ang, dead: false };
+  if (j.weapon === 'bunker') S.bombs.push(Object.assign({}, base, { kind: 'bunker', tx: j.tx, ty: j.ty, dur: 1.5, delay: 0, last: true }));
+  else for (let i = 0; i < 2; i++) S.bombs.push(Object.assign({}, base, { kind: 'jdam', tx: j.tx + rand(-6, 6), ty: j.ty + rand(-4, 4), dur: 1.1, delay: i * 0.22, last: i === 1 }));
+  SFX.whistle();
+}
+function updBombs(dt) {
+  for (const b of S.bombs) {
+    if (b.delay > 0) { b.delay -= dt; continue; }
+    b.T += dt / b.dur;
+    const T = Math.min(1, b.T);
+    b.x = lerp(b.x0, b.tx, T); b.y = lerp(b.y0, b.ty, T); b.z = b.z0 * (1 - T * T);
+    b.sx = b.x; b.sy = b.y - b.z;
+    b.ang = Math.atan2((b.ty - b.y0) + 2 * b.z0 * T, b.tx - b.x0);
+    if (b.T >= 1) { b.dead = true; bombImpact(b); }
+  }
+  S.bombs = S.bombs.filter((b) => !b.dead);
+}
+function drawBombs(shadow) {
+  for (const b of S.bombs) {
+    if (b.delay > 0) continue;
+    if (shadow) { ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(b.x, b.y, 3, 1.5, 0, 0, TAU); ctx.fill(); continue; }
+    const big = b.kind === 'bunker';
+    ctx.save(); ctx.translate(b.sx, b.sy); ctx.rotate(b.ang);
+    ctx.fillStyle = big ? '#5b6652' : '#3d444a'; rr(ctx, big ? -8 : -5, big ? -2 : -1.4, big ? 16 : 10, big ? 4 : 2.8, 1.4); ctx.fill();
+    ctx.fillStyle = '#1d2124'; ctx.fillRect(big ? -9 : -6, big ? -3 : -2, 2, big ? 6 : 4);
+    ctx.restore();
+  }
+}
+function bombImpact(b) {
+  const T = b.target;
+  if (b.kind === 'bunker') { bunkerBlast(b.tx, b.ty, T); return; }
+  explode(b.tx, b.ty, 2);
+  if (T.kind === 'launcher' && T.alive && T.gen === b.gen && dist(b.tx, b.ty, T.x, T.y) < 30) {
+    T.hp -= AIR.strikeDmg / 2;
+    if (T.hp <= 0) destroyLauncher(T);
+    else if (b.last) popup(T.x, T.y - 30, `LAUNCHER HIT: ARMOR ${Math.max(0, Math.ceil(T.hp))}/${T.max}`, '#ffcf6b', 13);
+  } else if (b.last && T.alive) popup(b.tx, b.ty - 30, 'MISSED: LAUNCHER RELOCATED', '#ffcf6b', 13);
+}
+function bunkerBlast(x, y, B) {
+  for (let i = 0; i < 8; i++) puff(x, y, { spr: SPR.dust, s0: 4, s1: 14, a0: 0.6, life: rand(0.8, 1.4), vx: rand(-40, 40), vy: rand(-30, 10) });
+  light(x, y, 30, 0.15, 0.6); addShake(3); SFX.thud();
+  popup(x, y - 26, 'PENETRATING...', '#ffcf6b', 12, 1);
+  demoEvent(x, y + 30, 1.8, 4.5, 12);
+  later(0.8, () => {
+    explode(x, y, 4.2);
+    flashA = Math.max(flashA, 0.45); slowmo(0.8); addShake(14);
+    for (let i = 0; i < 52; i++) { const a = i / 52 * TAU; P({ k: 'soft', spr: SPR.dust, x: x + Math.cos(a) * 10, y: y + Math.sin(a) * 7, vx: Math.cos(a) * rand(140, 240), vy: Math.sin(a) * rand(90, 160), drag: 2.3, life: rand(1.6, 2.6), s0: 8, s1: rand(22, 32), a0: 0.55, fadeIn: true }); }
+    P({ k: 'ring', add: true, c: 'rgb(255,220,180)', w: 6, x, y, life: 0.9, s0: 10, s1: 200, a0: 0.8 });
+    for (let k = 0; k < 34; k++) P({ k: 'soft', spr: Math.random() < 0.4 ? SPR.yellow : SPR.fire, add: true, x: x + rand(-14, 14), y: y + rand(-8, 8), vx: rand(-25, 25), vy: -rand(60, 210), drag: 1.1, life: rand(0.9, 1.7), s0: rand(12, 24), s1: 3, a0: 0.9 });
+    light(x, y, 240, 0.8, 0.8);
+    for (let i = 0; i < 5; i++) later(0.3 + i * 0.3, () => explode(x + rand(-46, 46), y + rand(-24, 24), rand(1.8, 2.8)));
+    addFire(x, y, 1.8); scorch(x, y, 50);
+    if (B && B.alive) destroyBunker(B);
+  });
+}
+function destroyBunker(B) {
+  B.alive = false; B.revealed = false; S.stats.bunkersKilled++;
+  S.treasury += AIR.bunkerBounty; S.stats.bounty += AIR.bunkerBounty;
+  const left = S.bunkers.filter((b) => b.alive).length;
+  popup(B.x, B.y - 40, `+${money(AIR.bunkerBounty, true)} BOUNTY`, '#7cffb2', 18, 2.4);
+  banner('UNDERGROUND BASE DESTROYED', left ? `${left} base${left > 1 ? 's' : ''} left. Fewer ballistic missiles from now on.` : 'No underground bases left. Ballistic attacks reduced to a trickle.', '#7cffb2', 3);
+  SFX.cash();
+}
+function placeBunkers() { S.bunkers.forEach((B, i) => { B.x = 210 + i * 430 + rand(-90, 90); B.y = Math.max(HUD_H + 26, enemyShore(B.x) - rand(58, 82)); }); }
+function revealSource(src) { if (src.kind === 'bunker') revealBunker(src); else revealLauncher(src); }
+function revealBunker(B) {
+  if (!B.revealed) { B.revealed = true; B.pingT = 0; B.fade = 0; SFX.ping(); if (!B.known) popup(B.x, B.y - 34, 'UNDERGROUND BASE LOCATED', '#ffb347', 13, 2.2); }
+  B.known = true; B.revealT = 12;
+}
+function updBunkers(dt) {
+  for (const B of S.bunkers) {
+    if (!B.alive || !B.revealed) continue;
+    B.revealT -= dt; B.pingT -= dt; B.fade = Math.min(1, B.fade + dt * 4);
+    if (B.pingT <= 0) { B.pingT = 1.25; P({ k: 'ring', add: true, c: 'rgb(255,170,60)', w: 2.5, x: B.x, y: B.y, life: 1.2, s0: 6, s1: 52, a0: 0.9 }); }
+    if (B.revealT <= 0) B.revealed = false;
+  }
+}
+function drawBunkers() {
+  for (const B of S.bunkers) {
+    if (!B.alive) {
+      if (!B.known) continue;
+      ctx.fillStyle = '#0f0c0a'; ctx.beginPath(); ctx.ellipse(B.x, B.y, 24, 16, 0, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,100,80,0.5)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.ellipse(B.x, B.y, 29, 20, 0, 0, TAU); ctx.stroke();
+      continue;
+    }
+    if (!B.known) continue;
+    ctx.save(); ctx.globalAlpha = B.revealed ? Math.min(1, B.fade + 0.4) : 0.6; ctx.translate(B.x, B.y);
+    ctx.fillStyle = '#4a4030'; ctx.beginPath(); ctx.ellipse(0, 0, 24, 15, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#5e5442'; ctx.beginPath(); ctx.ellipse(0, -1, 18, 11, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#8d8a82'; ctx.beginPath(); ctx.moveTo(-10, 5); ctx.lineTo(10, 5); ctx.lineTo(7, -6); ctx.lineTo(-7, -6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#101010'; ctx.fillRect(-5, -3, 10, 8);
+    ctx.fillStyle = '#2a2620'; circle(ctx, -16, -4, 2.2); circle(ctx, 16, -3, 2.2);
+    ctx.strokeStyle = B.revealed ? '#ffb347' : 'rgba(255,179,71,0.6)'; ctx.lineWidth = 2;
+    for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.beginPath(); ctx.moveTo(sx * 30, sy * 12); ctx.lineTo(sx * 30, sy * 21); ctx.lineTo(sx * 20, sy * 21); ctx.stroke(); }
+    ctx.font = '700 10px ' + FONT; ctx.textAlign = 'center'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+    const lbl = B.revealed ? 'UNDERGROUND BASE' : 'BASE · LAST KNOWN';
+    ctx.strokeText(lbl, 0, 34); ctx.fillStyle = '#ffb347'; ctx.fillText(lbl, 0, 34);
+    if (jetsReady() && (S.mode === 'prep' || S.mode === 'wave')) { ctx.strokeText('CLICK: BUNKER BUSTER', 0, 46); ctx.fillStyle = '#ffd36b'; ctx.fillText('CLICK: BUNKER BUSTER', 0, 46); }
+    ctx.restore();
+  }
+}
+function selectCarrier() {
+  ui.sel = S.carrier; ui.panel = { kind: 'carrier' };
+  elPanel.innerHTML = `<div class="ph"><span>CARRIER AIR WING</span><button class="x" data-act="close">✕</button></div>
+    <div class="row"><span>F-35s READY</span><b id="c-ready"></b></div>
+    <div class="row"><span>PRECISION STRIKE</span><b>${money(AIR.strikeCost, true)} / sortie</b></div>
+    <div class="row"><span>BUNKER BUSTER</span><b>${money(AIR.busterCost, true)} / sortie</b></div>
+    <div class="hint">While the carrier is selected, click a <span class="warn">red-pinged launcher</span> to send an F-35 with 2 guided bombs.<br>Click an <span class="warn">orange underground base</span> at any time to send a bunker buster. Each base destroyed cuts ballistic missiles for the rest of the war.</div>`;
+  placePanel({ x: S.carrier.x + 70, y: S.carrier.y - 14 }, 300); refreshPanel();
+}
+function carrierAt(x, y) { const c = S.carrier; return Math.abs(x - c.x) < 92 && Math.abs(y - c.y) < 24; }
+function bunkerAt(x, y) { return S.bunkers.find((B) => B.alive && B.known && dist(x, y, B.x, B.y) < 30) || null; }
+
+// ============================== CAMERA ==============================
+const cam = { x: W / 2, y: H / 2, z: 1, tx: W / 2, ty: H / 2, tz: 1, follow: null };
+function camTo(x, y, z) { cam.follow = null; cam.tx = x; cam.ty = y; cam.tz = z; }
+function camFollow(o, z) { cam.follow = o; cam.tz = z; }
+function camReset() { cam.follow = null; cam.x = cam.tx = W / 2; cam.y = cam.ty = H / 2; cam.z = cam.tz = 1; }
+function objGone(o) { return !o || o.dead === true || o.done === true || o.alive === false; }
+function updCam(dt) {
+  if (cam.follow) {
+    if (objGone(cam.follow)) cam.follow = null;
+    else { cam.tx = cam.follow.sx !== undefined ? cam.follow.sx : cam.follow.x; cam.ty = cam.follow.sy !== undefined ? cam.follow.sy : cam.follow.y; }
+  }
+  const k = 1 - Math.exp(-dt * 2.4);
+  cam.z += (cam.tz - cam.z) * k;
+  const hw = W / (2 * cam.z), hh = H / (2 * cam.z);
+  cam.x += (clamp(cam.tx, hw, W - hw) - cam.x) * k; cam.y += (clamp(cam.ty, hh, H - hh) - cam.y) * k;
+  cam.x = clamp(cam.x, hw, W - hw); cam.y = clamp(cam.y, hh, H - hh);
+}
+function worldToScreen(x, y) { return { x: (x - cam.x) * cam.z + W / 2, y: (y - cam.y) * cam.z + H / 2 }; }
+
+// ============================== DEMO: AI COMMANDER ==============================
+const PERSONAS = [
+  { name: 'BALANCED', desc: 'mixes air defense with counter-strikes', order: [[2, 'ciws'], [3, 'patriot'], [4, 'himars'], [1, 'ciws'], [5, 'ciws'], [0, 'patriot']], reserve: 6e6, heavyFirst: false, busterAt: 14e6, strikeAt: 14e6 },
+  { name: 'HUNTER', desc: 'goes after launchers and bases early', order: [[2, 'ciws'], [4, 'himars'], [3, 'patriot'], [1, 'ciws'], [5, 'himars'], [0, 'ciws']], reserve: 5e6, heavyFirst: false, busterAt: 10e6, strikeAt: 10e6 },
+  { name: 'SHIELD', desc: 'builds a deep air-defense wall first', order: [[2, 'ciws'], [3, 'patriot'], [1, 'ciws'], [5, 'ciws'], [4, 'himars'], [0, 'patriot']], reserve: 8e6, heavyFirst: true, busterAt: 18e6, strikeAt: 18e6 },
+];
+const D = { on: false, games: 0, offset: 0, persona: PERSONAS[0], actions: [], act: null, cur: { x: W / 2, y: H / 2, vis: false }, thinkT: 0, shot: null, shotT: 0, shotP: 0, letter: 0, fade: 0, fadeT: 0, endT: 0, seenWaste: 0, used: {}, manualT: 0 };
+const elDemo = document.getElementById('demoUI');
+const elCap = document.getElementById('demoCaption');
+const elCur = document.getElementById('demoCursor');
+const elDemoSound = document.getElementById('demoSound');
+
+function say(title, text, tone = '') {
+  if (!S.demo) return;
+  elCap.innerHTML = `<b class="${tone}">${title}</b><span>${text}</span>`;
+  elCap.classList.remove('show'); void elCap.offsetWidth; elCap.classList.add('show');
+}
+function sayOnce(key, title, text, tone) { if (D.used[key]) return false; D.used[key] = true; say(title, text, tone); return true; }
+function demoEvent(x, y, z, hold, prio) {
+  if (!S.demo) return;
+  if (D.shotT > 0 && prio < D.shotP && !objGone(D.shot)) return;
+  camTo(x, y, z); D.shot = {}; D.shotT = hold; D.shotP = prio;
+}
+function qWorld(x, y, track) { D.actions.push({ kind: 'world', x, y, track }); }
+function qEl(sel) { D.actions.push({ kind: 'el', sel }); }
+function qDo(fn) { D.actions.push({ kind: 'do', fn }); }
+function elStagePos(sel) {
+  const el = document.querySelector(sel);
+  if (!el || el.offsetParent === null) return null;
+  const r = el.getBoundingClientRect(), s = stage.getBoundingClientRect();
+  return { el, x: (r.left + r.width / 2 - s.left) / VS, y: (r.top + r.height / 2 - s.top) / VS };
+}
+function clickFx() { elCur.classList.remove('click'); void elCur.offsetWidth; elCur.classList.add('click'); SFX.click(); }
+function runActions(dt) {
+  if (!D.act) {
+    if (!D.actions.length) return;
+    D.act = D.actions.shift(); D.act.t = 0;
+    if (D.act.kind === 'do') { D.act.fn(); D.act = null; return; }
+  }
+  const a = D.act; a.t += dt;
+  let tx, ty;
+  if (a.kind === 'world') {
+    if (a.track) { if (objGone(a.track)) { D.act = null; D.actions = []; closePanel(); return; } a.x = a.track.sx; a.y = a.track.sy; }
+    const p = worldToScreen(a.x, a.y); tx = p.x; ty = p.y;
+  } else {
+    const p = elStagePos(a.sel);
+    if (!p) { D.act = null; return; }
+    tx = p.x; ty = p.y; a.el = p.el;
+  }
+  D.cur.vis = true;
+  const k = Math.min(1, dt * 7);
+  D.cur.x += (tx - D.cur.x) * k; D.cur.y += (ty - D.cur.y) * k;
+  if (!a.clicked && a.t > 0.5 && Math.hypot(tx - D.cur.x, ty - D.cur.y) < 6) {
+    a.clicked = true; a.wait = 0.35; clickFx();
+    if (a.kind === 'world') handleWorldClick(a.x, a.y); else a.el.click();
+  }
+  if (a.clicked) { a.wait -= dt; if (a.wait <= 0) D.act = null; }
+  if (a.t > 4) D.act = null;
+}
+function aiThink() {
+  const P2 = S.pads, c = S.carrier, pr = D.persona;
+  if (S.mode !== 'prep' && S.mode !== 'wave') return;
+  if (D.shotT > 0 && D.shotP >= 9 && !objGone(D.shot)) return;
+  // 1. Learn from a wasted Patriot shot
+  if (S.stats.patriotWaste > D.seenWaste) {
+    D.seenWaste = S.stats.patriotWaste;
+    const p = P2.find((u) => u && u.type === 'patriot' && u.mode === 'auto');
+    if (p) {
+      say('COMMANDER', 'That Patriot just fired $4M at a $20K drone. Switching it to HEAVY ONLY.', 'red');
+      qWorld(p.x, p.y); qEl('#panel [data-act="mode"]'); qDo(closePanel); return;
+    }
+  }
+  // 2. Bunker buster on a known underground base
+  const B = S.bunkers.find((b) => b.alive && b.known && !S.jets.some((j) => j.target === b));
+  if (B && jetsReady() && S.treasury > pr.busterAt) {
+    say('COMMANDER', 'Underground missile base located. Sending an F-35 with a bunker buster: $20M, one shot.', 'amb');
+    qWorld(c.x, c.y); qWorld(B.x, B.y); qDo(closePanel); return;
+  }
+  // 3. Counter-strike an exposed launcher
+  const L = S.launchers.find((l) => l.alive && l.revealed && l.revealT > 3.2 && !S.rockets.some((r) => r.L === l) && !S.jets.some((j) => j.target === l));
+  if (L) {
+    if (P2.some(himarsReady)) { say('COMMANDER', 'Launcher exposed. HIMARS salvo before it relocates.'); qWorld(L.x, L.y); return; }
+    if (jetsReady() && S.treasury > pr.strikeAt) { say('COMMANDER', 'HIMARS is reloading. Launching an F-35 from the carrier instead.'); qWorld(c.x, c.y); qWorld(L.x, L.y); qDo(closePanel); return; }
+  }
+  // 4. Build or rebuild
+  for (const [pad, type] of pr.order) {
+    if (P2[pad]) continue;
+    if (S.treasury < UNIT[type].build + (S.wave === 0 ? 0 : pr.reserve)) break;
+    const lines = { ciws: 'a CIWS, the cheap answer to drone swarms.', patriot: 'a Patriot battery for the missile threat.', himars: 'a HIMARS to hunt the mobile launchers.' };
+    say('COMMANDER', `Deploying ${lines[type]}`);
+    qWorld(PADS[pad].x, PADS[pad].y); qEl(`#panel .card[data-unit="${type}"]`);
+    if (type === 'patriot' && pr.heavyFirst) { qEl('#panel [data-act="mode"]'); qDo(() => say('COMMANDER', 'Patriot set to HEAVY ONLY from the start. No $4M shots at drones.')); }
+    qDo(closePanel);
+    return;
+  }
+  // 5. Manual Patriot shot on a cruise missile closing in
+  const pat = P2.find((u) => u && u.type === 'patriot' && u.tubes.includes(1));
+  if (pat && D.manualT <= 0) {
+    const cm = S.threats.find((t) => t.type === 'cruise' && t.engaged === 0 && dist(t.x, t.y, t.tx, t.ty) < 300 && t.sy > HUD_H + 40);
+    if (cm) {
+      D.manualT = 25;
+      say('COMMANDER', 'Cruise missile slipping through. Taking a manual Patriot shot.', 'amb');
+      qWorld(pat.x, pat.y); qWorld(cm.sx, cm.sy, cm); qDo(closePanel); return;
+    }
+  }
+  // 6. Call the next wave early
+  if (S.mode === 'prep' && S.prepT < 6 && S.prepT > 1.2 && P2.filter(Boolean).length >= 3) {
+    qDo(() => { sayOnce('early', 'COMMANDER', 'Defenses ready. Calling the next wave early for the $0.5M bonus.'); nextWaveNow(); });
+  }
+}
+function directorTick(dt) {
+  D.shotT -= dt;
+  if (D.act || D.actions.length) {
+    if (cam.tz > 1.01 || cam.follow) camTo(W / 2, H / 2, 1);
+    return;
+  }
+  if (D.shotT > 0 && !objGone(D.shot)) return;
+  const cands = [];
+  for (const t of S.threats) if (t.type === 'ballistic' && t.T > 0.42 && !t.cw) cands.push([10, t, 1.55, 3.4, 'cw']);
+  for (const j of S.jets) {
+    if (j.phase === 'cat' && !j.cw1) cands.push([9, j, 2.0, 2.6, 'cw1']);
+    else if (j.phase === 'ingress' && !j.cw2 && dist(j.x, j.y, j.tx, j.ty) < 420) cands.push([9, j, 1.5, 3, 'cw2']);
+  }
+  for (const b of S.bombs) if (b.kind === 'bunker' && !b.cw) cands.push([11, b, 1.8, 3, 'cw']);
+  for (const r of S.rockets) if (!r.salvo.cw) cands.push([7, r, 1.25, 2.4, 'salvo']);
+  for (const m of S.missiles) if (m.phase === 'guide' && m.target && m.target.type === 'cruise' && !m.cw) cands.push([5, m, 1.45, 2.2, 'cw']);
+  if (!cands.length) {
+    if (cam.tz > 1.01 || cam.follow) camTo(W / 2, H / 2, 1);
+    D.shot = {}; D.shotT = 1.2; D.shotP = 0; return;
+  }
+  cands.sort((a, b) => b[0] - a[0]);
+  const [p, o, z, hold, flag] = cands[0];
+  if (flag === 'salvo') o.salvo.cw = true; else o[flag] = true;
+  camFollow(o, z); D.shot = o; D.shotT = hold; D.shotP = p;
+}
+function demoTick(dt) {
+  if (!D.on) return;
+  D.manualT -= dt;
+  if (S.mode === 'over') {
+    D.endT -= dt;
+    if (cam.tz > 1.01 || cam.follow) camTo(W / 2, H / 2, 1);
+    if (D.endT < 1.3) D.fadeT = 1;
+    if (D.endT <= 0) newDemoGame();
+    return;
+  }
+  runActions(dt);
+  directorTick(dt);
+  D.thinkT -= dt;
+  if (D.thinkT <= 0 && !D.act && !D.actions.length) { D.thinkT = 0.8; aiThink(); }
+  if (!D.act && !D.actions.length) D.cur.vis = false;
+}
+function newDemoGame() {
+  D.games++;
+  D.persona = PERSONAS[(D.games - 1 + D.offset) % PERSONAS.length];
+  S = newState(); parts = []; S.demo = true;
+  placeBunkers(); for (const L of S.launchers) placeLauncher(L);
+  S.mode = 'prep'; S.prepT = 14;
+  closePanel(); camReset();
+  D.actions = []; D.act = null; D.seenWaste = 0; D.used = {}; D.shot = null; D.shotT = 0; D.shotP = 0; D.thinkT = 2; D.manualT = 30; D.endT = 0;
+  D.fade = 1; D.fadeT = 0;
+  say(`AI COMMANDER · GAME ${D.games}`, `Strategy: ${D.persona.name}, ${D.persona.desc}. Every game plays out differently.`);
+  refreshButtons();
+}
+function startDemo() {
+  SFX.init();
+  D.on = true; D.games = 0; D.offset = randi(0, PERSONAS.length - 1);
+  elDemo.classList.remove('hidden'); elOverlay.classList.add('hidden'); elPause.classList.add('hidden');
+  document.getElementById('hudButtons').classList.add('hidden');
+  newDemoGame();
+}
+function stopDemo(play) {
+  D.on = false; D.actions = []; D.act = null; D.cur.vis = false; D.fade = 0; D.fadeT = 0;
+  elDemo.classList.add('hidden'); document.getElementById('hudButtons').classList.remove('hidden');
+  camReset();
+  if (play) startGame(); else showTitle();
+}
+function showTitle() {
+  S = newState(); parts = []; placeBunkers(); for (const L of S.launchers) placeLauncher(L);
+  closePanel(); camReset();
+  elOverlay.innerHTML = START_HTML; elOverlay.classList.remove('hidden');
+  refreshButtons(); ui.lastInput = performance.now();
+}
+function drawDemoBars() {
+  const L = D.letter; if (L <= 0.001) return;
+  const th = 50 * L, bh = 48 * L;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, th); ctx.fillRect(0, H - bh, W, bh);
+  if (!D.on || L < 0.9) return;
+  const blink = Math.sin(S.time * 5) > 0;
+  ctx.fillStyle = blink ? '#ff3b30' : '#7a1d18'; circle(ctx, 18, 25, 5);
+  ctx.textAlign = 'left'; ctx.font = '800 12px ' + FONT; ctx.fillStyle = '#fff'; ctx.fillText('LIVE · AI COMMANDER', 30, 22);
+  ctx.font = '600 10px ' + FONT; ctx.fillStyle = '#8fa9b8'; ctx.fillText(`GAME ${D.games} · ${D.persona.name} STRATEGY`, 30, 37);
+  const s = S.stats, ratio = s.enemy > 0 ? s.your / s.enemy : 0;
+  const items = [
+    ['WAVE', `${S.wave} / 10`, '#ffffff', 84], ['TREASURY', money(S.treasury), S.treasury < 0 ? '#ff4d4d' : '#7cffb2', 112],
+    ['DEFENSE SPENT', money(s.your), '#ff6b5a', 122], ['ATTACKER SPENT', money(s.enemy), '#ffc04d', 122], ['COST RATIO', ratio ? ratio.toFixed(1) + ' : 1' : '—', '#ffffff', 100],
+  ];
+  let x = 218;
+  for (const [l, v, c, w] of items) {
+    ctx.font = '700 9px ' + FONT; ctx.fillStyle = '#5f8fa8'; ctx.fillText(l, x, 18);
+    ctx.font = '700 15px ' + MONO; ctx.fillStyle = c; ctx.fillText(v, x, 37); x += w;
+  }
 }
 
 // ============================== INPUT ==============================
@@ -1348,15 +1835,18 @@ function padAt(x, y) { return PADS.findIndex((p) => Math.abs(x - p.x) < 36 && Ma
 
 cv.addEventListener('pointermove', (e) => {
   const p = toLocal(e); ui.mx = p.x; ui.my = p.y;
-  if (S.mode !== 'prep' && S.mode !== 'wave') { cv.style.cursor = 'default'; return; }
-  const hot = padAt(p.x, p.y) >= 0 || launcherAt(p.x, p.y) || (ui.sel && ui.sel.type === 'patriot' && threatAt(p.x, p.y));
+  if (D.on || (S.mode !== 'prep' && S.mode !== 'wave')) { cv.style.cursor = 'default'; return; }
+  const hot = padAt(p.x, p.y) >= 0 || launcherAt(p.x, p.y) || bunkerAt(p.x, p.y) || carrierAt(p.x, p.y) || (ui.sel && ui.sel.type === 'patriot' && threatAt(p.x, p.y));
   cv.style.cursor = hot ? 'pointer' : 'crosshair';
 });
 cv.addEventListener('pointerdown', (e) => {
   SFX.init();
+  if (D.on) return;
   const p = toLocal(e); ui.mx = p.x; ui.my = p.y;
   if ((S.mode !== 'prep' && S.mode !== 'wave') || S.paused) return;
-  const { x, y } = p;
+  handleWorldClick(p.x, p.y);
+});
+function handleWorldClick(x, y) {
   if (ui.sel && ui.sel.type === 'patriot' && !ui.sel.dead) {
     const t = threatAt(x, y);
     if (t) {
@@ -1365,20 +1855,32 @@ cv.addEventListener('pointerdown', (e) => {
       return;
     }
   }
+  const B = bunkerAt(x, y);
+  if (B) {
+    if (!launchStrike(B, 'bunker')) { SFX.err(); popup(B.x, B.y - 30, 'NO F-35 READY', '#ffcf6b', 13); }
+    if (ui.sel === S.carrier) closePanel();
+    return;
+  }
   const L = launcherAt(x, y);
   if (L) {
+    if (ui.sel === S.carrier) {
+      if (!launchStrike(L, 'jdam')) { SFX.err(); popup(L.x, L.y - 28, 'NO F-35 READY', '#ffcf6b', 13); }
+      closePanel(); return;
+    }
     let u = himarsReady(ui.sel) ? ui.sel : null;
     if (!u) { let bd = 1e9; for (const h of S.pads) if (himarsReady(h)) { const d = Math.abs(h.x - L.x); if (d < bd) { bd = d; u = h; } } }
     if (u) fireSalvo(u, L);
-    else { SFX.err(); popup(L.x, L.y - 28, S.pads.some((h) => h && h.type === 'himars') ? 'HIMARS RELOADING' : 'DEPLOY A HIMARS TO STRIKE', '#ffcf6b', 13); }
+    else { SFX.err(); popup(L.x, L.y - 28, jetsReady() ? 'NO HIMARS READY: SELECT THE CARRIER FOR AN F-35' : S.pads.some((h) => h && h.type === 'himars') ? 'HIMARS RELOADING' : 'DEPLOY A HIMARS TO STRIKE', '#ffcf6b', 13); }
     return;
   }
+  if (carrierAt(x, y)) { SFX.click(); selectCarrier(); return; }
   const i = padAt(x, y);
   if (i >= 0) { SFX.click(); if (S.pads[i]) selectUnit(S.pads[i]); else openShop(i); return; }
   if (ui.panel) closePanel();
-});
+}
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
+  if (D.on) { SFX.init(); if (k === 'escape') stopDemo(false); else if (k === 'm') toggleMute(); return; }
   if (k === 'm') { SFX.init(); toggleMute(); }
   else if (k === 'escape' && ui.panel) closePanel();
   else if (k === 'p' || k === 'escape') togglePause();
@@ -1386,6 +1888,7 @@ window.addEventListener('keydown', (e) => {
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && (S.mode === 'prep' || S.mode === 'wave')) togglePause(true); });
 window.addEventListener('resize', resize);
+for (const ev of ['pointerdown', 'pointermove', 'keydown']) window.addEventListener(ev, () => { ui.lastInput = performance.now(); });
 
 // ============================== RENDER ==============================
 const droneShape = [[11, 0], [3, 2.5], [-6, 10], [-8.5, 10], [-6, 2], [-9, 1.5], [-9, -1.5], [-6, -2], [-8.5, -10], [-6, -10], [3, -2.5]];
@@ -1481,7 +1984,7 @@ function drawLaunchers() {
     for (let i = 0; i < L.max; i++) { ctx.fillStyle = i < L.hp ? '#ffb347' : 'rgba(255,255,255,0.15)'; ctx.fillRect(-22 + i * 3.7, 34, 2.6, 3); }
     ctx.font = '700 10px ' + FONT; ctx.textAlign = 'center'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
     ctx.strokeText('MOBILE LAUNCHER', 0, 49); ctx.fillStyle = '#ff6b5a'; ctx.fillText('MOBILE LAUNCHER', 0, 49);
-    if (S.pads.some(himarsReady)) {
+    if (S.pads.some(himarsReady) || (ui.sel === S.carrier && jetsReady())) {
       const pl = 0.5 + 0.5 * Math.sin(S.time * 8);
       ctx.strokeStyle = `rgba(255,220,120,${0.5 + 0.5 * pl})`; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(0, 0, 30 + pl * 3, 0, TAU); ctx.moveTo(-38, 0); ctx.lineTo(-26, 0); ctx.moveTo(38, 0); ctx.lineTo(26, 0); ctx.moveTo(0, -38); ctx.lineTo(0, -26); ctx.moveTo(0, 38); ctx.lineTo(0, 26); ctx.stroke();
@@ -1500,6 +2003,8 @@ function drawThreatShadows() {
   }
   for (const m of S.missiles) { const a = 0.3 * Math.max(0, 1 - m.z / 300); if (a <= 0.01) continue; ctx.fillStyle = `rgba(0,0,0,${a})`; ctx.beginPath(); ctx.ellipse(m.x, m.y + m.z, 5, 2.5, 0, 0, TAU); ctx.fill(); }
   for (const r of S.rockets) { ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.beginPath(); ctx.ellipse(r.gx, r.gy, 4, 2, 0, 0, TAU); ctx.fill(); }
+  for (const j of S.jets) drawF35(ctx, j.x + 2, j.y + 2, j.ang, 1.05, 1, true);
+  drawBombs(true);
 }
 function drawThreatBodies() {
   for (const t of S.threats) {
@@ -1567,6 +2072,13 @@ function drawGlows() {
     if (m.phase === 'boost' || m.z < 80) g(SPR.light, m.x, m.y + m.z, 34, 0.5 * Math.max(0, 1 - m.z / 120));
   }
   for (const r of S.rockets) { const c = Math.cos(r.ang), s = Math.sin(r.ang); g(SPR.fire, r.sx - c * 5, r.sy - s * 5, 6 + Math.random() * 2, 1); }
+  for (const j of S.jets) {
+    const c = Math.cos(j.ang), s = Math.sin(j.ang), tx = j.sx - c * 15, ty = j.sy - s * 15, boost = j.phase === 'cat' || j.phase === 'climb';
+    g(SPR.fire, tx, ty, (boost ? 7 : 4) + Math.random() * 2, 0.9);
+    if (boost) { g(SPR.yellow, tx, ty, 4, 1); g(SPR.light, tx, ty, 30, 0.45); }
+    if (Math.sin(S.time * 9 + j.t) > 0.7) { g(SPR.red, j.sx - s * 9.5, j.sy + c * 9.5, 3, 0.9); g(SPR.cyan, j.sx + s * 9.5, j.sy - c * 9.5, 3, 0.9); }
+  }
+  for (const B of S.bunkers) if (B.alive && B.revealed) g(SPR.fire, B.x, B.y, 40, 0.2 * Math.min(1, B.fade));
   ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
 }
 function drawWarnings() {
@@ -1594,6 +2106,12 @@ function drawWorldUI() {
     ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(b.x - 55, y, 110, 4);
     ctx.fillStyle = r > 0.6 ? '#4cd97b' : r > 0.3 ? '#ffc04d' : '#ff4d4d'; ctx.fillRect(b.x - 55, y, 110 * r, 4);
   }
+  {
+    const c = S.carrier, rd = jetsReady();
+    ctx.textAlign = 'center'; ctx.font = '700 10px ' + FONT;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; rr(ctx, c.x - 82, c.y - 47, 164, 15, 3); ctx.fill();
+    ctx.fillStyle = rd ? '#8fdcff' : '#ffcf6b'; ctx.fillText(`CARRIER AIR WING \u00B7 F-35 ${rd}/${AIR.jets} READY`, c.x, c.y - 36);
+  }
   // units: badges, hp, status
   for (const u of S.pads) {
     if (!u) continue;
@@ -1617,7 +2135,8 @@ function drawWorldUI() {
   const s = ui.sel;
   if (s && !s.dead) {
     ctx.save(); ctx.strokeStyle = '#5ad2ff'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]); ctx.lineDashOffset = -S.time * 20;
-    ctx.beginPath(); ctx.arc(s.x, s.y, 38, 0, TAU); ctx.stroke();
+    if (s === S.carrier) { rr(ctx, s.x - 96, s.y - 28, 192, 56, 6); ctx.stroke(); }
+    else { ctx.beginPath(); ctx.arc(s.x, s.y, 38, 0, TAU); ctx.stroke(); }
     if (s.type === 'ciws') { ctx.fillStyle = 'rgba(90,210,255,0.05)'; ctx.beginPath(); ctx.arc(s.x, s.y - 6, UNIT.ciws.range, 0, TAU); ctx.fill(); ctx.strokeStyle = 'rgba(90,210,255,0.35)'; ctx.stroke(); }
     if (s.type === 'patriot') { ctx.strokeStyle = 'rgba(90,210,255,0.22)'; ctx.beginPath(); ctx.arc(s.x, s.y, UNIT.patriot.range, 0, TAU); ctx.stroke(); }
     ctx.restore();
@@ -1635,10 +2154,12 @@ function drawWorldUI() {
   }
   // context hint
   let hint = null;
-  if (S.mode === 'prep' || S.mode === 'wave') {
+  if ((S.mode === 'prep' || S.mode === 'wave') && !S.demo) {
     if (s && s.type === 'patriot') hint = 'PATRIOT SELECTED: click any threat to fire one missile manually ($4M)';
     else if (s && s.type === 'himars') hint = 'HIMARS SELECTED: click a red-pinged launcher on the enemy coast';
+    else if (s === S.carrier) hint = 'CARRIER SELECTED: click a red-pinged launcher (F-35 strike) or an orange base (bunker buster)';
     else if (S.launchers.some((L) => L.alive && L.revealed) && S.pads.some(himarsReady)) hint = 'ENEMY LAUNCHER REVEALED: click it to strike with HIMARS';
+    else if (S.bunkers.some((b) => b.alive && b.known) && jetsReady()) hint = 'UNDERGROUND BASE LOCATED: click it to send an F-35 bunker buster ($20M)';
     else if (S.mode === 'prep' && S.wave === 0) hint = 'Click a concrete pad to deploy. Start with CIWS for drones and one Patriot for missiles.';
   }
   if (hint) {
@@ -1667,7 +2188,7 @@ function drawBanner() {
   const t = b.age / b.life;
   const a = Math.min(1, b.age * 5, (1 - t) * 4);
   ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center';
-  const y = 226 + (b.age < 0.2 ? (0.2 - b.age) * 60 : 0);
+  const y = (S.demo ? 300 : 226) + (b.age < 0.2 ? (0.2 - b.age) * 60 : 0);
   ctx.fillStyle = 'rgba(2,8,14,0.55)'; ctx.fillRect(0, y - 38, W, 66);
   ctx.fillStyle = b.color; ctx.globalAlpha = a * 0.6; ctx.fillRect(0, y - 38, W, 1); ctx.fillRect(0, y + 27, W, 1); ctx.globalAlpha = a;
   ctx.font = '800 34px ' + FONT; ctx.shadowColor = b.color; ctx.shadowBlur = 18; ctx.fillStyle = b.color;
@@ -1717,14 +2238,20 @@ function drawHUD() {
   ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(416, 40, 454, 4);
   if (tot > 0) { const yw = 454 * s.your / tot; ctx.fillStyle = '#ff6b5a'; ctx.fillRect(416, 40, yw, 4); ctx.fillStyle = '#ffc04d'; ctx.fillRect(416 + yw, 40, 454 - yw, 4); }
   // launchers
-  lab(898, 16, 'ENEMY LAUNCHERS');
+  lab(896, 16, 'LAUNCHERS \u00B7 BASES');
+  S.bunkers.forEach((B, i) => {
+    const x = 980 + i * 12, y = 33;
+    ctx.strokeStyle = B.alive ? '#ffb347' : '#4a5a66'; ctx.lineWidth = 1.5; ctx.strokeRect(x - 4, y - 4, 8, 8);
+    if (!B.alive) { ctx.beginPath(); ctx.moveTo(x - 4, y - 4); ctx.lineTo(x + 4, y + 4); ctx.stroke(); }
+    else if (B.known) { ctx.fillStyle = B.revealed && blink ? '#ffb347' : 'rgba(255,179,71,0.4)'; ctx.fillRect(x - 4, y - 4, 8, 8); }
+  });
   S.launchers.forEach((L, i) => {
-    const x = 906 + i * 20, y = 33;
+    const x = 902 + i * 15, y = 33;
     ctx.save(); ctx.translate(x, y);
-    if (!L.alive) { ctx.strokeStyle = '#4a5a66'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-5, -5); ctx.lineTo(5, 5); ctx.moveTo(5, -5); ctx.lineTo(-5, 5); ctx.stroke(); }
+    if (!L.alive) { ctx.strokeStyle = '#4a5a66'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-4, -4); ctx.lineTo(4, 4); ctx.moveTo(4, -4); ctx.lineTo(-4, 4); ctx.stroke(); }
     else {
-      ctx.rotate(Math.PI / 4); ctx.strokeStyle = '#ff4a3d'; ctx.lineWidth = 1.5; ctx.strokeRect(-5, -5, 10, 10);
-      if (L.revealed && blink) { ctx.fillStyle = '#ff4a3d'; ctx.fillRect(-5, -5, 10, 10); }
+      ctx.rotate(Math.PI / 4); ctx.strokeStyle = '#ff4a3d'; ctx.lineWidth = 1.5; ctx.strokeRect(-4, -4, 8, 8);
+      if (L.revealed && blink) { ctx.fillStyle = '#ff4a3d'; ctx.fillRect(-4, -4, 8, 8); }
     }
     ctx.restore();
   });
@@ -1739,17 +2266,22 @@ function render() {
   const sx = (Math.random() * 2 - 1) * shake, sy = (Math.random() * 2 - 1) * shake;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.drawImage(bgCanvas, sx * PX, sy * PX);
-  ctx.setTransform(PX, 0, 0, PX, sx * PX, sy * PX);
+  const z = cam.z, ox = W / 2 - cam.x * z + sx, oy = H / 2 - cam.y * z + sy;
+  ctx.setTransform(PX * z, 0, 0, PX * z, ox * PX, oy * PX);
+  ctx.drawImage(bgCanvas, 0, 0, W, H);
   drawAmbient();
+  drawCarrier();
   drawScorches();
+  drawBunkers();
   drawLaunchers();
   drawPads();
   for (const b of S.buildings) drawBuilding(b);
   for (const u of S.pads) if (u) drawUnit(u);
   drawThreatShadows();
   drawThreatBodies();
+  drawBombs(false);
   drawParticles(false);
+  drawJets();
   drawGlows();
   drawParticles(true);
   drawWarnings();
@@ -1760,6 +2292,8 @@ function render() {
   drawBanner();
   drawHUD();
   if (flashA > 0) { ctx.fillStyle = `rgba(255,240,220,${flashA})`; ctx.fillRect(0, 0, W, H); }
+  drawDemoBars();
+  if (D.fade > 0.003) { ctx.fillStyle = `rgba(0,0,0,${D.fade})`; ctx.fillRect(0, 0, W, H); }
 }
 
 // ============================== LOOP ==============================
@@ -1790,14 +2324,21 @@ function update(dt) {
   if (S.mode === 'menu') return;
   updLaunchers(dt);
   if (S.mode !== 'over') updateUnits(dt);
-  updThreats(dt); updMissiles(dt); updRockets(dt);
+  updBunkers(dt);
+  updThreats(dt); updMissiles(dt); updRockets(dt); updJets(dt); updBombs(dt);
   if (S.mode === 'prep') { S.prepT -= dt; if (S.prepT <= 0) startWave(S.wave + 1); }
   else if (S.mode === 'wave') { S.waveT += dt; spawnFromQueue(); if (!S.queue.length && !S.threats.length) waveCleared(); }
   if (S.mode === 'prep' || S.mode === 'wave') { updIncome(dt); checkLose(); }
   ui.tick += dt;
   if (ui.tick > 0.2) { ui.tick = 0; refreshPanel(); if (ui.sel && ui.sel.dead) closePanel(); }
+  if (S.demo) demoTick(dt);
 }
 
+function updPresentation(dt) {
+  updCam(dt);
+  D.letter += ((D.on ? 1 : 0) - D.letter) * Math.min(1, dt * 3);
+  D.fade += clamp(D.fadeT - D.fade, -dt / 1.2, dt / 1.2);
+}
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -1810,12 +2351,28 @@ function frame(now) {
     shake *= Math.exp(-dt * 9); if (shake < 0.05) shake = 0;
     flashA = Math.max(0, flashA - dt * 1.6);
   }
+  updPresentation(dt);
+  if (D.on) {
+    const cs = D.cur;
+    elCur.style.transform = `translate(${cs.x.toFixed(1)}px,${cs.y.toFixed(1)}px)`;
+    elCur.classList.toggle('vis', cs.vis);
+    const lbl = !SFX.ready ? 'CLICK FOR SOUND' : SFX.muted ? 'SOUND OFF' : 'SOUND ON';
+    if (elDemoSound.textContent !== lbl) elDemoSound.textContent = lbl;
+  } else if (S.mode === 'menu' && !elOverlay.classList.contains('hidden') && document.getElementById('btnStart') && performance.now() - ui.lastInput > 25000) startDemo();
   render();
   requestAnimationFrame(frame);
 }
 
 // ============================== BOOT ==============================
+document.getElementById('demoPlay').addEventListener('click', () => { SFX.init(); stopDemo(true); });
+document.getElementById('demoExit').addEventListener('click', () => stopDemo(false));
+elDemoSound.addEventListener('click', () => { const was = SFX.ready; SFX.init(); if (!was) { if (SFX.muted) toggleMute(); } else toggleMute(); });
+document.getElementById('demoFull').addEventListener('click', () => { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen(); });
+document.getElementById('demoBar').addEventListener('pointerdown', (e) => e.stopPropagation());
+const START_HTML = elOverlay.innerHTML;
+ui.lastInput = performance.now();
 S = newState();
+placeBunkers();
 for (const L of S.launchers) placeLauncher(L);
 ICONS = { ciws: unitIcon('ciws'), patriot: unitIcon('patriot'), himars: unitIcon('himars') };
 resize();
@@ -1824,6 +2381,7 @@ requestAnimationFrame(frame);
 // Small hook for automated testing / debugging in the console.
 window.HORMUZ = {
   get state() { return S; }, startWave: (n) => startWave(n), money,
-  step(sec) { const n = Math.round(sec * 60); for (let i = 0; i < n; i++) { S.time += 1 / 60; update(1 / 60); } render(); },
+  step(sec) { const n = Math.round(sec * 60); for (let i = 0; i < n; i++) { S.time += 1 / 60; update(1 / 60); updPresentation(1 / 60); } render(); },
+  startDemo, stopDemo, D, cam,
 };
 })();
