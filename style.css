@@ -131,3 +131,22 @@ html, body {
 #demoCursor::after { content: ''; position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%; border: 2px solid #8fdcff; opacity: 0; }
 #demoCursor.click::after { animation: clk 0.45s ease-out; }
 @keyframes clk { from { opacity: 1; transform: scale(0.3); } to { opacity: 0; transform: scale(1.5); } }
+
+/* ---------- Command center ---------- */
+.hbtn.cmd { background: rgba(255, 192, 77, 0.16); border-color: #ffc04d; color: #ffd98a; }
+.linkbtn { display: block; margin: 10px auto 0; background: none; border: none; color: #ffd36b; font-family: inherit; font-size: 13px; letter-spacing: 1px; cursor: pointer; text-decoration: underline; }
+.sect { font-size: 12px; font-weight: 700; letter-spacing: 2px; color: #8fdcff; margin: 6px 0 6px; }
+.sect i { font-style: normal; font-weight: 400; letter-spacing: 0; color: #6f8fa3; font-size: 11px; margin-left: 8px; }
+.ucards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-bottom: 8px; }
+.ucards.ops { grid-template-columns: repeat(3, 1fr); }
+.ucard { text-align: left; background: rgba(20, 40, 58, 0.8); border: 1px solid rgba(120, 200, 240, 0.25); border-radius: 6px; padding: 8px 9px; color: #d6ecf7; cursor: pointer; font-family: inherit; display: flex; flex-direction: column; gap: 3px; }
+.ucard b { font-size: 12px; letter-spacing: 1px; }
+.ucard .uc { font-family: Consolas, Menlo, monospace; color: #fff; font-size: 13px; }
+.ucard .ug { font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+.ucard p { font-size: 10.5px; line-height: 1.35; color: #9fb8c6; }
+.ucard.ok { border-color: #5ad2ff; } .ucard.ok .ug { color: #7cffb2; }
+.ucard.ok:hover { background: rgba(30, 62, 88, 0.95); transform: translateY(-2px); }
+.ucard.lock { opacity: 0.55; cursor: not-allowed; } .ucard.lock .ug { color: #ffcf6b; }
+.ucard.own { border-color: #2bbf7a; background: rgba(43, 191, 122, 0.12); cursor: default; } .ucard.own .ug { color: #7cffb2; }
+.ucard.cd { cursor: default; } .ucard.cd .ug { color: #ffcf6b; }
+.sbx { display: flex; justify-content: flex-end; } .sbx .btn { width: auto; padding: 6px 14px; color: #ffd36b; border-color: rgba(255, 211, 107, 0.5); }

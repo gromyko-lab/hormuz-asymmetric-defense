@@ -37,6 +37,12 @@ const UNIT = {
   },
 };
 
+UNIT.laser = {
+  name: 'LASER TURRET', short: 'LASER', build: 10e6, shot: 1e3, hp: 60, range: 235,
+  tag: 'Pennies per shot', ammo: 'per kill',
+  role: 'A high-energy beam burns drones and cruise missiles for about $1K a kill. Cannot reach ballistic missiles. Ignores decoys.',
+};
+
 const THREAT = {
   drone:     { name: 'Shahed drone',      cost: 20e3,  speed: 50,  z: 22, dmg: 7 },
   decoy:     { name: 'Decoy drone',       cost: 5e3,   speed: 56,  z: 22, dmg: 0 },
@@ -86,6 +92,168 @@ const playerShore = (x) => 568 + 7 * Math.sin(x * 0.009 + 2) + 5 * Math.sin(x * 
 function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
 function circle(g, x, y, r) { g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); }
 
+// ============================== CREDIT LIMIT ==============================
+function canAfford(amount) { return S.sandbox || S.treasury - amount >= CFG.bankruptLimit; }
+function atCreditLimit() { return !S.sandbox && S.treasury - UNIT.ciws.shot < CFG.bankruptLimit; }
+function noFunds(x, y) {
+  if ((S.noFundsT || 0) > S.time) return;
+  S.noFundsT = S.time + 2.5;
+  popup(x, y, 'NO FUNDS: CREDIT LIMIT', '#ff6b5a', 12);
+  if (!S.warnedCredit) { S.warnedCredit = true; banner('CREDIT LIMIT REACHED', 'Weapons hold fire until income brings you back above −$20M. Protect your income!', '#ff6b5a', 4); }
+}
+
+// ============================== ISLANDS ==============================
+const ISLANDS = [
+  { id: 0, name: 'GULL ISLAND', x: 455, y: 236, rx: 62, ry: 30, value: 250e3, start: 'neutral', cost: 8e6, seed: 11 },
+  { id: 1, name: 'PEARL KEY', x: 830, y: 372, rx: 72, ry: 34, value: 400e3, start: 'enemy', cost: 16e6, seed: 23 },
+  { id: 2, name: 'SENTINEL ROCK', x: 1065, y: 226, rx: 58, ry: 30, value: 300e3, start: 'enemy', cost: 14e6, seed: 37 },
+];
+const ISLAND_PATHS = ISLANDS.map((d) => {
+  const r = mulberry32(d.seed), p = new Path2D(), n = 22;
+  for (let i = 0; i < n; i++) {
+    const a = i / n * TAU, k = 0.82 + r() * 0.28;
+    const x = Math.cos(a) * d.rx * k, y = Math.sin(a) * d.ry * k;
+    i ? p.lineTo(x, y) : p.moveTo(x, y);
+  }
+  p.closePath(); return p;
+});
+const ISLAND_DOTS = ISLANDS.map((d) => { const r = mulberry32(d.seed + 5), a = []; for (let i = 0; i < 40; i++) { const t = r() * TAU, k = Math.sqrt(r()) * 0.7; a.push([Math.cos(t) * d.rx * k, Math.sin(t) * d.ry * k, r()]); } return a; });
+ISLANDS.forEach((d) => PADS.push({ x: d.x + d.rx * 0.32, y: d.y + 2, island: d.id }));
+const islandSeizeGate = (is) => is.cost * 1.5;
+
+function makeIslands() { return ISLANDS.map((d) => Object.assign({}, d, { owner: d.start, hp: 60, max: 60, kind: 'island', alive: true, gen: 0 })); }
+function padUsable(i) { const p = PADS[i]; return p.island === undefined || S.islands[p.island].owner === 'player'; }
+function islandAt(x, y) { return S.islands.find((is) => ((x - is.x) / is.rx) ** 2 + ((y - is.y) / is.ry) ** 2 < 1.1) || null; }
+
+function drawIslands() {
+  for (const is of S.islands) {
+    const path = ISLAND_PATHS[is.id];
+    ctx.save(); ctx.translate(is.x, is.y);
+    ctx.strokeStyle = 'rgba(60,150,160,0.18)'; ctx.lineWidth = 16; ctx.stroke(path);
+    ctx.strokeStyle = 'rgba(200,230,240,0.3)'; ctx.lineWidth = 2; ctx.stroke(path);
+    ctx.fillStyle = '#6b5f40'; ctx.fill(path);
+    ctx.save(); ctx.scale(0.86, 0.8); ctx.fillStyle = '#34402f'; ctx.fill(path); ctx.restore();
+    for (const [x, y, v] of ISLAND_DOTS[is.id]) { ctx.fillStyle = v < 0.5 ? 'rgba(20,30,18,0.5)' : 'rgba(110,130,90,0.35)'; ctx.fillRect(x, y, 2, 2); }
+    // dock / oil terminal
+    ctx.fillStyle = '#4a4f52'; ctx.fillRect(-is.rx * 0.9, is.ry * 0.25, is.rx * 0.45, 5);
+    ctx.fillStyle = '#9aa1a5'; circle(ctx, -is.rx * 0.45, -is.ry * 0.25, 5); circle(ctx, -is.rx * 0.25, -is.ry * 0.35, 4);
+    const ox = -is.rx * 0.32, oy = -2;
+    if (is.owner === 'enemy') {
+      ctx.fillStyle = '#d9d9d2'; circle(ctx, ox, oy, 7); ctx.strokeStyle = '#ff4a3d'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ox, oy, 9, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,74,61,0.8)'; ctx.lineWidth = 1.2; const a = S.time * 2; ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + Math.cos(a) * 9, oy + Math.sin(a) * 9); ctx.stroke();
+    } else if (is.owner === 'player') {
+      ctx.strokeStyle = '#cfd6da'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(ox, oy + 8); ctx.lineTo(ox, oy - 12); ctx.stroke();
+      const wv = Math.sin(S.time * 4) * 1.5; ctx.fillStyle = '#3d8bff'; ctx.beginPath(); ctx.moveTo(ox, oy - 12); ctx.lineTo(ox + 12, oy - 9 + wv); ctx.lineTo(ox, oy - 5); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+function drawIslandLabels() {
+  for (const is of S.islands) {
+    const own = is.owner === 'player', en = is.owner === 'enemy';
+    const y = is.y - is.ry - 14;
+    const txt = own ? `${is.name}  +${money(is.value * is.hp / is.max, true)}/5s` : en ? `${is.name} · ENEMY OUTPOST` : `${is.name} · NEUTRAL`;
+    ctx.font = '700 10px ' + FONT; ctx.textAlign = 'center';
+    const w = ctx.measureText(txt).width + 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; rr(ctx, is.x - w / 2, y - 11, w, 15, 3); ctx.fill();
+    ctx.fillStyle = own ? '#7cffb2' : en ? '#ff6b5a' : '#c9d4da'; ctx.fillText(txt, is.x, y);
+    if (own) { const r = is.hp / is.max; ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(is.x - 40, y + 6, 80, 3); ctx.fillStyle = r > 0.5 ? '#4cd97b' : '#ff4d4d'; ctx.fillRect(is.x - 40, y + 6, 80 * r, 3); }
+    else if (!S.assaults.some((a) => a.is === is) && (S.mode === 'prep' || S.mode === 'wave') && !S.demo) {
+      ctx.font = '700 9px ' + FONT; ctx.fillStyle = S.treasury >= islandSeizeGate(is) ? '#ffd36b' : 'rgba(255,211,107,0.5)';
+      ctx.fillText(`CLICK TO SEIZE · +${money(is.value, true)}/5s`, is.x, y + 14);
+    }
+  }
+}
+function selectIsland(is) {
+  ui.sel = null; ui.panel = { kind: 'island', is };
+  const own = is.owner === 'player';
+  let h = `<div class="ph"><span>${is.name}</span><button class="x" data-act="close">✕</button></div>
+    <div class="row"><span>STATUS</span><b>${own ? 'HELD BY YOU' : is.owner === 'enemy' ? 'ENEMY OUTPOST' : 'NEUTRAL'}</b></div>
+    <div class="row"><span>OIL TERMINAL INCOME</span><b>+${money(is.value, true)} / 5s</b></div>`;
+  if (own) {
+    h += `<div class="row"><span>GARRISON</span><b>${Math.round(is.hp)} / ${is.max}</b></div>
+      <div class="hint">Enemy drones and cruise missiles will try to take it back. Build on the island pad to defend it. If the garrison falls, the enemy retakes the island.</div>`;
+  } else {
+    h += `<button class="btn heavy" data-act="seize">SEIZE ISLAND · ${money(is.cost, true)}</button>
+      <div class="hint">Needs ${money(islandSeizeGate(is), true)} on hand. Marines in landing craft with a helicopter escort.${is.owner === 'enemy' ? ' <span class="warn">Enemy drones launch from this outpost with less warning.</span>' : ''}</div>`;
+  }
+  elPanel.innerHTML = h; placePanel({ x: is.x, y: is.y - is.ry + 20 }, 290);
+}
+function seizeIsland(is) {
+  if (is.owner === 'player' || S.assaults.some((a) => a.is === is)) return;
+  if (S.treasury < islandSeizeGate(is)) { SFX.err(); popup(is.x, is.y - 50, `NEEDS ${money(islandSeizeGate(is), true)} ON HAND`, '#ffcf6b', 13); return; }
+  spend(is.cost, 'islands'); S.stats.seized++;
+  const c = S.carrier;
+  const boats = [0, 1, 2].map((i) => ({ x: c.x + 70 + i * 6, y: c.y + 14 + i * 6, ox: -is.rx * 0.75 + i * 16, oy: is.ry * 0.55 + i * 3 }));
+  S.assaults.push({ is, boats, phase: 'out', t: 0, ft: 0, hx: c.x, hy: c.y - 40, sx: c.x, sy: c.y - 40, spin: 0 });
+  banner(`ASSAULT ON ${is.name}`, 'Marines are on the way in landing craft.', '#8fdcff', 2.6);
+  SFX.click(); closePanel();
+}
+function updAssaults(dt) {
+  for (const a of S.assaults) {
+    a.t += dt; a.spin += dt * 30;
+    const is = a.is;
+    if (a.phase === 'out') {
+      let arrived = 0;
+      for (const b of a.boats) {
+        const tx = is.x + b.ox, ty = is.y + b.oy, d = dist(b.x, b.y, tx, ty);
+        const st = Math.min(d, 95 * dt); b.ang = Math.atan2(ty - b.y, tx - b.x);
+        b.x += Math.cos(b.ang) * st; b.y += Math.sin(b.ang) * st;
+        if (d < 3) arrived++;
+        if (Math.random() < 0.3) P({ k: 'soft', spr: SPR.steam, x: b.x - Math.cos(b.ang) * 6, y: b.y - Math.sin(b.ang) * 6, vx: rand(-4, 4), vy: rand(-4, 4), life: 1.2, s0: 2, s1: 7, a0: 0.3 });
+      }
+      a.hx += (is.x - 20 - a.hx) * Math.min(1, dt * 0.8); a.hy += (is.y - 50 - a.hy) * Math.min(1, dt * 0.8);
+      if (arrived === a.boats.length) { a.phase = 'fight'; popup(is.x, is.y - 46, is.owner === 'enemy' ? 'MARINES LANDING UNDER FIRE' : 'MARINES ASHORE', '#8fdcff', 13); }
+    } else if (a.phase === 'fight') {
+      a.ft += dt;
+      const fightT = is.owner === 'enemy' ? 6 : 2.5;
+      if (is.owner === 'enemy' && Math.random() < 0.6) {
+        const b = pick(a.boats), sx = is.x + b.ox + rand(-4, 4), sy = is.y + b.oy - 6, ex = is.x - is.rx * 0.32 + rand(-8, 8), ey = is.y + rand(-6, 6);
+        P({ k: 'line', add: true, c: 'rgb(255,230,140)', w: 1.2, len: 0.02, x: sx, y: sy, vx: (ex - sx) * 3, vy: (ey - sy) * 3, life: 0.33 });
+        if (Math.random() < 0.4) P({ k: 'line', add: true, c: 'rgb(255,120,90)', w: 1.2, len: 0.02, x: ex, y: ey, vx: (sx - ex) * 3, vy: (sy - ey) * 3, life: 0.33 });
+        if (Math.random() < 0.05) explode(ex + rand(-10, 10), ey + rand(-6, 6), 0.7);
+      }
+      if (a.ft > fightT) {
+        if (is.owner === 'enemy') explode(is.x - is.rx * 0.32, is.y - 2, 2.2);
+        is.owner = 'player'; is.hp = is.max; is.gen++;
+        banner(`${is.name} SECURED`, `+${money(is.value, true)} every 5 seconds. Build on its pad to defend it.`, '#7cffb2', 3.2);
+        popup(is.x, is.y - 50, `+${money(is.value, true)}/5s`, '#7cffb2', 16, 2.2); SFX.cash();
+        demoEvent(is.x, is.y, 1.8, 3, 8);
+        a.phase = 'done';
+      }
+    } else { a.hy -= 60 * dt; a.hx -= 40 * dt; if (a.t > 30 || a.hy < -60) a.dead = true; for (const b of a.boats) b.x -= 0; if (a.phase === 'done' && !a.left) { a.left = true; } }
+    a.sx = a.hx; a.sy = a.hy;
+  }
+  S.assaults = S.assaults.filter((a) => !a.dead);
+}
+function drawAssaults(shadow) {
+  for (const a of S.assaults) {
+    if (a.phase !== 'done') for (const b of a.boats) {
+      if (shadow) continue;
+      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.ang || 0);
+      ctx.strokeStyle = 'rgba(220,240,250,0.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(-20, -5); ctx.moveTo(-6, 0); ctx.lineTo(-20, 5); ctx.stroke();
+      ctx.fillStyle = '#5a6168'; rr(ctx, -7, -3.5, 14, 7, 2); ctx.fill(); ctx.fillStyle = '#3a4046'; ctx.fillRect(-4, -2, 7, 4);
+      ctx.restore();
+    }
+    drawHeli(ctx, shadow ? a.hx + 3 : a.hx, shadow ? a.hy + 40 : a.hy, 0.3, a.spin, shadow);
+  }
+}
+function damageIsland(is, dmg, x, y) {
+  if (is.owner !== 'player') return;
+  if (S.up.civil) dmg = Math.round(dmg * 0.65);
+  is.hp = Math.max(0, is.hp - dmg);
+  popup(is.x, is.y - 30, `${is.name} HIT  -${dmg}`, '#ff6b5a', 11);
+  if (is.hp <= 0) {
+    is.owner = 'enemy'; is.hp = is.max; is.gen++;
+    const pi = PADS.findIndex((p) => p.island === is.id);
+    if (pi >= 0 && S.pads[pi]) damageUnit(S.pads[pi], 999);
+    explode(is.x, is.y, 2.6);
+    banner(`${is.name} LOST`, 'The enemy retook the island. Its income is gone.', '#ff4d4d', 3);
+    demoEvent(is.x, is.y, 1.7, 3, 8);
+    if (ui.panel && ui.panel.is === is) closePanel();
+  }
+}
+
 // ============================== AUDIO ==============================
 const SFX = (() => {
   let ac = null, out = null, nb = null, muted = false;
@@ -125,6 +293,7 @@ const SFX = (() => {
     init,
     get muted() { return muted; },
     get ready() { return !!ac && ac.state === 'running'; },
+    laser() { if (!can('laser', 0.28)) return; const t = ac.currentTime; tone(t, 0.3, 'sawtooth', 880, 1320, 0.035, 0.02); tone(t, 0.3, 'sine', 1760, 1700, 0.03, 0.02); },
     jet() { if (!can('jet', 0.6)) return; const t = ac.currentTime; noise(t, 2.4, 'bandpass', 260, 1500, 0.7, 0.32, 0.35); noise(t, 2.2, 'lowpass', 500, 120, 0.6, 0.28, 0.3); },
     whistle() { if (can('wh', 0.3)) tone(ac.currentTime, 0.9, 'sine', 1500, 420, 0.05, 0.08); },
     thud() { if (!can('thud', 0.2)) return; const t = ac.currentTime; tone(t, 0.6, 'sine', 70, 22, 0.9); noise(t, 0.35, 'lowpass', 400, 60, 0.6, 0.45); },
@@ -321,12 +490,12 @@ function newState() {
     treasury: CFG.startTreasury, wave: 0, prepT: CFG.firstPrep, queue: [], waveT: 0, salvoL: {},
     incomeT: 0, steamT: 0,
     threats: [], missiles: [], rockets: [], fires: [], scorches: [], popups: [], timers: [],
-    pads: [null, null, null, null, null, null], launchers: [], buildings: [], banner: null,
-    bunkers: [], jets: [], bombs: [], demo: false, carrier: { type: 'carrier', x: 300, y: 496, slots: [] },
+    pads: PADS.map(() => null), launchers: [], buildings: [], banner: null, islands: [], assaults: [],
+    bunkers: [], jets: [], bombs: [], demo: false, sandbox: false, up: {}, opsCd: {}, reapers: [], raids: [], toms: [], hellfires: [], awacsA: 0, awacsPing: 0, carrier: { type: 'carrier', x: 300, y: 496, slots: [] },
     result: null, loseQueued: false, waveStart: { your: 0, enemy: 0 },
     stats: {
       your: 0, enemy: 0, build: 0, patriot: 0, ciws: 0, himars: 0, income: 0, bounty: 0, bonus: 0,
-      air: 0, strikes: 0, busters: 0, bunkersKilled: 0,
+      air: 0, strikes: 0, busters: 0, bunkersKilled: 0, upgrades: 0, ops: 0, laser: 0, islands: 0, seized: 0, islandIncome: 0, opsRun: 0, raidLosses: 0, laserKills: 0,
       patriotShots: 0, patriotWaste: 0, ciwsBursts: 0, salvos: 0, hits: 0, launchersKilled: 0,
       launched: { drone: 0, decoy: 0, cruise: 0, ballistic: 0 }, killed: { drone: 0, decoy: 0, cruise: 0, ballistic: 0 },
     },
@@ -339,6 +508,7 @@ function newState() {
   };
   for (let i = 0; i < 70; i++) s.dashes.push({ x: rand(0, W), y: rand(175, 545), len: rand(8, 26), spd: rand(4, 10), ph: rand(0, TAU) });
   s.buildings = [makePower(), makeCity(), makeRefinery()];
+  s.islands = makeIslands();
   for (let i = 0; i < CFG.launchers; i++) { const L = { kind: 'launcher', id: i, hp: 14, max: 14, alive: true, revealed: false, revealT: 0, gen: 0, pingT: 0, x: 0, y: 0, rot: 0, fade: 0 }; s.launchers.push(L); }
   for (let i = 0; i < AIR.jets; i++) s.carrier.slots.push({ state: 'ready', t: 0 });
   for (let i = 0; i < AIR.bunkers; i++) s.bunkers.push({ kind: 'bunker', id: i, alive: true, known: false, revealed: false, revealT: 0, pingT: 0, fade: 0, x: 0, y: 0, gen: 0 });
@@ -416,7 +586,7 @@ function renderBackground() {
   g.strokeStyle = 'rgba(230,200,90,0.35)'; g.setLineDash([10, 10]); g.lineWidth = 1;
   g.beginPath(); g.moveTo(0, 712); g.lineTo(W, 712); g.stroke(); g.setLineDash([]);
   g.fillStyle = '#191c1e';
-  for (const p of PADS) g.fillRect(p.x - 4, p.y + 26, 8, 706 - p.y - 26);
+  for (const p of PADS) if (p.island === undefined) g.fillRect(p.x - 4, p.y + 26, 8, 706 - p.y - 26);
   for (const x of [330, 640, 950]) g.fillRect(x - 5, 704, 10, 4);
   g.restore();
   g.strokeStyle = 'rgba(200,230,240,0.25)'; g.lineWidth = 1.5; shorePath(playerShore); g.stroke();
@@ -593,6 +763,7 @@ function scorch(x, y, r) { S.scorches.push({ x, y, r }); if (S.scorches.length >
 
 function damageBuilding(b, dmg, x, y) {
   if (b.hp <= 0) return;
+  if (S.up.civil) dmg = Math.round(dmg * 0.65);
   b.hp = Math.max(0, b.hp - dmg);
   const ratio = b.hp / b.max;
   S.stats.hits++;
@@ -701,7 +872,7 @@ function drawUnit(u) {
   const sc = age < 0.35 ? 1 + (0.35 - age) * 1.2 : 1;
   ctx.save();
   if (sc !== 1) { ctx.translate(u.x, u.y); ctx.scale(sc, sc); ctx.translate(-u.x, -u.y); ctx.globalAlpha = clamp(age / 0.2, 0, 1); }
-  if (u.type === 'ciws') drawCIWS(ctx, u); else if (u.type === 'patriot') drawPatriot(ctx, u); else drawHimars(ctx, u);
+  if (u.type === 'ciws') drawCIWS(ctx, u); else if (u.type === 'patriot') drawPatriot(ctx, u); else if (u.type === 'laser') drawLaserUnit(ctx, u); else drawHimars(ctx, u);
   ctx.restore();
 }
 
@@ -711,24 +882,24 @@ function unitIcon(type) {
   const gr = g.createRadialGradient(32, 32, 4, 32, 32, 32); gr.addColorStop(0, 'rgba(90,210,255,0.18)'); gr.addColorStop(1, 'rgba(90,210,255,0)');
   g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
   const u = { x: 32, y: 32, aim: -Math.PI / 2 - 0.5, tubes: [1, 1, 1, 1], loaded: 6, podAim: 0.3 };
-  if (type === 'ciws') drawCIWS(g, u); else if (type === 'patriot') drawPatriot(g, u); else drawHimars(g, u);
+  if (type === 'ciws') drawCIWS(g, u); else if (type === 'patriot') drawPatriot(g, u); else if (type === 'laser') drawLaserUnit(g, u); else drawHimars(g, u);
   return c.toDataURL();
 }
 let ICONS = {};
 
-function spend(amount, cat) { S.treasury -= amount; S.stats[cat] += amount; S.stats.your += amount; }
+function spend(amount, cat) { if (!S.sandbox) S.treasury -= amount; S.stats[cat] += amount; S.stats.your += amount; }
 
 function updateUnits(dt) {
   for (const u of S.pads) {
     if (!u) continue;
-    if (u.type === 'ciws') updCIWS(u, dt); else if (u.type === 'patriot') updPatriot(u, dt); else updHimars(u, dt);
+    if (u.type === 'ciws') updCIWS(u, dt); else if (u.type === 'patriot') updPatriot(u, dt); else if (u.type === 'laser') updLaser(u, dt); else updHimars(u, dt);
   }
 }
 
 // ---- CIWS ----
 function updCIWS(u, dt) {
   u.cd -= dt;
-  const R = UNIT.ciws.range, ox = u.x, oy = u.y - 6;
+  const R = ciwsRange(), ox = u.x, oy = u.y - 6;
   const t0 = u.target;
   if (!t0 || !t0.alive || dist(ox, oy, t0.sx, t0.sy) > R) {
     u.target = null; let bd = 1e9;
@@ -742,7 +913,7 @@ function updCIWS(u, dt) {
   if (!t) { u.aim += Math.sin(S.time * 0.7 + u.pad) * 0.4 * dt; return; }
   const ta = Math.atan2(t.sy - oy, t.sx - ox);
   u.aim = turnToward(u.aim, ta, 10 * dt);
-  if (Math.abs(angDiff(u.aim, ta)) < 0.2 && u.cd <= 0) { u.cd = 0.2; ciwsBurst(u, t); }
+  if (Math.abs(angDiff(u.aim, ta)) < 0.2 && u.cd <= 0) { u.cd = 0.2; if (canAfford(UNIT.ciws.shot)) ciwsBurst(u, t); else noFunds(u.x, u.y - 40); }
 }
 function ciwsBurst(u, t) {
   spend(UNIT.ciws.shot, 'ciws'); S.stats.ciwsBursts++; t.spent += UNIT.ciws.shot;
@@ -757,7 +928,7 @@ function ciwsBurst(u, t) {
   light(mx, my, 16, 0.07, 0.95, SPR.yellow);
   P({ k: 'dot', c: '#d8b25a', x: u.x - sa * 8, y: u.y - 6 + ca * 8, vx: -sa * rand(30, 60), vy: ca * rand(30, 60) + 10, drag: 3, life: 0.5, s0: 1.6 });
   SFX.ciws();
-  const hitP = t.type === 'drone' ? 0.42 : 0.11;
+  const hitP = (t.type === 'drone' ? 0.42 : 0.11) + (S.up.ciwsRadar ? 0.14 : 0);
   if (Math.random() < hitP) {
     for (let i = 0; i < 4; i++) { const a = rand(0, TAU); P({ k: 'line', add: true, c: 'rgb(255,240,180)', w: 1.2, len: 0.02, x: t.sx, y: t.sy, vx: Math.cos(a) * 200, vy: Math.sin(a) * 200, drag: 4, life: 0.25 }); }
     t.hp--; if (t.hp <= 0) killThreat(t, 'ciws');
@@ -768,13 +939,14 @@ function ciwsBurst(u, t) {
 function updPatriot(u, dt) {
   u.cd -= dt;
   const empty = u.tubes.indexOf(0);
-  if (empty >= 0) { u.tubeT -= dt; if (u.tubeT <= 0) { u.tubes[empty] = 1; u.tubeT = 4; } } else u.tubeT = 4;
+  if (empty >= 0) { u.tubeT -= dt; if (u.tubeT <= 0) { u.tubes[empty] = 1; u.tubeT = S.up.pac3 ? 2.6 : 4; } } else u.tubeT = S.up.pac3 ? 2.6 : 4;
   if (u.cd > 0 || !u.tubes.includes(1)) return;
   let best = null, bs = -1e9;
   for (const t of S.threats) {
     if (!t.alive || t.engaged > 0 || t.sy < HUD_H + 20) continue;
     const heavy = t.type === 'ballistic' || t.type === 'cruise';
     if (u.mode === 'heavy' && !heavy) continue;
+    if (u.mode === 'auto' && awacsSkips(t)) continue;
     if (t.type === 'ballistic' && t.T < 0.45) continue;
     if (dist(u.x, u.y, t.sx, t.sy) > UNIT.patriot.range) continue;
     const s = (t.type === 'ballistic' ? 3000 : t.type === 'cruise' ? 2000 : 1000) - dist(t.x, t.y, t.tx, t.ty);
@@ -784,6 +956,7 @@ function updPatriot(u, dt) {
 }
 function firePatriot(u, t, manual) {
   const i = u.tubes.indexOf(1); if (i < 0) return false;
+  if (!canAfford(UNIT.patriot.shot)) { noFunds(u.x, u.y - 52); return 'nofunds'; }
   u.tubes[i] = 0;
   const x = u.x + PT_TUBES[i][0], y = u.y + PT_TUBES[i][1];
   spend(UNIT.patriot.shot, 'patriot'); S.stats.patriotShots++;
@@ -809,6 +982,7 @@ function reacquire(m) {
   let best = null, bd = 280;
   for (const t of S.threats) {
     if (!t.alive || t.engaged > 0 || !patriotAllowed(m.mode, t)) continue;
+    if (m.mode === 'auto' && awacsSkips(t)) continue;
     if (t.type === 'ballistic' && t.T < 0.45) continue;
     const d = dist(m.x, m.y, t.sx, t.sy);
     if (d < bd) { bd = d; best = t; }
@@ -839,11 +1013,11 @@ function updMissiles(dt) {
         m.dir = turnToward(m.dir, Math.atan2(py - m.y, px - m.x), (3 + m.t * 4) * dt);
         m.zT = t.z || 0;
       } else { m.lost += dt; if (m.lost > 0.7) { airburst(m); continue; } }
-      m.speed = Math.min(580, m.speed + 650 * dt);
+      m.speed = Math.min(S.up.pac3 ? 670 : 580, m.speed + 650 * dt);
       m.x += Math.cos(m.dir) * m.speed * dt; m.y += Math.sin(m.dir) * m.speed * dt;
       m.z += (m.zT - m.z) * Math.min(1, dt * 1.2);
       if (t && dist(m.x, m.y, t.sx, t.sy) < 15) {
-        if (Math.random() < 0.93) { m.dead = true; killThreat(t, 'patriot'); continue; }
+        if (Math.random() < (S.up.pac3 ? 0.99 : 0.93)) { m.dead = true; killThreat(t, 'patriot'); continue; }
         t.engaged = Math.max(0, t.engaged - 1);
         popup(t.sx, t.sy - 14, 'MISS', '#ffcf6b', 13);
         m.target = null; m.lost = 0.3;
@@ -878,6 +1052,7 @@ function updHimars(u, dt) {
 }
 function himarsReady(u) { return u && u.type === 'himars' && !u.salvo && u.reload <= 0; }
 function fireSalvo(u, L) {
+  if (!canAfford(UNIT.himars.shot)) { SFX.err(); noFunds(L.x, L.y - 28); return false; }
   spend(UNIT.himars.shot, 'himars'); S.stats.salvos++;
   u.salvo = { L, gen: L.gen, n: 6, t: 0.25, lx: L.x, ly: L.y, hits: 0 };
   popup(L.x, L.y - 28, 'SALVO INBOUND', '#ffb347', 13);
@@ -929,6 +1104,9 @@ function damageUnit(u, d) {
 // ============================== THREATS ==============================
 function pickTarget(t) {
   if (t.type === 'decoy') { t.tx = rand(60, W - 60); t.ty = playerShore(t.tx) + rand(4, 14); return; }
+  t.ti = null;
+  const own = S.islands.filter((is) => is.owner === 'player');
+  if (own.length && t.type !== 'ballistic' && Math.random() < 0.22) { const is = pick(own); t.ti = is; t.tb = null; t.tu = null; t.tx = is.x + rand(-is.rx * 0.4, is.rx * 0.4); t.ty = is.y + rand(-is.ry * 0.3, is.ry * 0.3); return; }
   const units = S.pads.filter(Boolean);
   const chance = t.type === 'drone' ? 0.18 : t.type === 'cruise' ? 0.12 : 0.1;
   if (units.length && Math.random() < chance) { const u = pick(units); t.tu = u; t.tb = null; t.tx = u.x + rand(-6, 6); t.ty = u.y + rand(-6, 6); return; }
@@ -945,7 +1123,7 @@ function pickTarget(t) {
 function spawnThreat(type, L) {
   const T = THREAT[type];
   const t = { type, alive: true, x: L.x, y: L.y + 4, z: 0, cost: T.cost, spent: 0, engaged: 0, hp: 1, age: 0, wob: rand(0, TAU),
-    speed: (T.speed || 0) * rand(0.9, 1.1), hist: [], ang: Math.PI / 2, vx: 0, vy: 0, sx: L.x, sy: L.y + 4, tb: null, tu: null };
+    speed: (T.speed || 0) * rand(0.9, 1.1), hist: [], ang: Math.PI / 2, vx: 0, vy: 0, sx: L.x, sy: L.y + 4, tb: null, tu: null, ti: null };
   pickTarget(t);
   if (type === 'ballistic') {
     t.x0 = t.x; t.y0 = t.y; t.T = 0; t.dur = rand(6.2, 7.2); t.peak = rand(300, 340);
@@ -962,7 +1140,7 @@ function spawnThreat(type, L) {
 }
 
 function retarget(t) {
-  t.tu = null;
+  t.tu = null; t.ti = null;
   const alive = S.buildings.filter((b) => b.hp > 0);
   if (!alive.length) { t.tb = null; return; }
   const b = pick(alive);
@@ -982,7 +1160,7 @@ function updThreats(dt) {
       if (T < 0.25) puff(t.x, t.y - t.z, { spr: SPR.smoke, s0: 3, s1: 14, a0: 0.3, life: 2, vy: 0 });
       else if (Math.random() < 0.5) P({ k: 'soft', spr: SPR.red, add: true, x: t.x + rand(-2, 2), y: t.y - t.z, vx: rand(-10, 10), vy: rand(-10, 10), life: 0.4, s0: 4, s1: 1, a0: 0.7 });
     } else {
-      if ((t.tb && t.tb.hp <= 0) || (t.tu && t.tu.dead)) retarget(t);
+      if ((t.tb && t.tb.hp <= 0) || (t.tu && t.tu.dead) || (t.ti && t.ti.owner !== 'player')) retarget(t);
       const dx = t.tx - t.x, dy = t.ty - t.y, d = Math.hypot(dx, dy);
       if (d < 7) { if (t.type === 'decoy') fizzle(t); else impact(t); continue; }
       const wob = t.type === 'cruise' ? Math.sin(t.age * 2 + t.wob) * 0.12 : Math.sin(t.age * 1.4 + t.wob) * 0.28;
@@ -1013,7 +1191,8 @@ function impact(t) {
   const p = t.type === 'ballistic' ? 3.2 : t.type === 'cruise' ? 2.2 : 1.5;
   explode(t.x, t.y, p);
   if (t.type === 'ballistic') { slowmo(0.45); flashA = Math.max(flashA, 0.35); addShake(6); }
-  if (t.tu && !t.tu.dead && dist(t.x, t.y, t.tu.x, t.tu.y) < 40) {
+  if (t.ti) { damageIsland(t.ti, T.dmg, t.x, t.y); }
+  else if (t.tu && !t.tu.dead && dist(t.x, t.y, t.tu.x, t.tu.y) < 40) {
     damageUnit(t.tu, t.type === 'ballistic' ? 999 : t.type === 'cruise' ? 60 : 32);
   } else {
     const pad = t.type === 'ballistic' ? 20 : 8;
@@ -1054,7 +1233,7 @@ function placeLauncher(L) {
 }
 function revealLauncher(L) {
   if (!L.revealed) { L.revealed = true; L.pingT = 0; L.fade = 0; SFX.ping(); }
-  L.revealT = CFG.reveal;
+  L.revealT = CFG.reveal + (S.up.awacs ? 4 : 0);
 }
 function updLaunchers(dt) {
   for (const L of S.launchers) {
@@ -1119,6 +1298,7 @@ function spawnFromQueue() {
   while (S.queue.length && S.queue[0].t <= S.waveT) {
     const it = S.queue.shift();
     if (it.type === 'ballistic') { const bs = S.bunkers.filter((x) => x.alive); if (bs.length) { spawnThreat('ballistic', pick(bs)); continue; } }
+    if (it.type !== 'ballistic') { const eIs = S.islands.filter((x) => x.owner === 'enemy'); if (eIs.length && Math.random() < 0.22) { spawnThreat(it.type, pick(eIs)); continue; } }
     let L = S.salvoL[it.salvo];
     if (!L || !L.alive) {
       const alive = S.launchers.filter((l) => l.alive);
@@ -1144,7 +1324,7 @@ function nextWaveNow() {
 }
 
 // ============================== ECONOMY / FLOW ==============================
-function incomeRate() { let v = 0; for (const b of S.buildings) v += b.income * b.hp / b.max; return v; }
+function incomeRate() { let v = 0; for (const b of S.buildings) v += b.income * b.hp / b.max; for (const is of S.islands) if (is.owner === 'player') v += is.value * is.hp / is.max; return v; }
 function updIncome(dt) {
   S.incomeT += dt;
   if (S.incomeT < CFG.incomeEvery) return;
@@ -1154,11 +1334,11 @@ function updIncome(dt) {
     const v = b.income * b.hp / b.max;
     if (v > 0) { tot += v; popup(b.x + rand(-12, 12), b.y - 64, '+' + money(v, true), '#7cffb2', 12, 1.4); }
   }
+  for (const is of S.islands) if (is.owner === 'player') { const v = is.value * is.hp / is.max; tot += v; S.stats.islandIncome += v; popup(is.x, is.y - is.ry - 30, '+' + money(v, true), '#7cffb2', 12, 1.4); }
   S.treasury += tot; S.stats.income += tot;
 }
 function checkLose() {
   if (S.mode === 'over') return;
-  if (S.treasury < CFG.bankruptLimit) { endGame(false, 'Bankrupt: debt went past −$20M. The war cost more than the state could borrow.'); return; }
   if (!S.loseQueued && S.buildings.every((b) => b.hp <= 0)) { S.loseQueued = true; later(2.2, () => endGame(false, 'All coastal infrastructure was destroyed.')); }
 }
 function endGame(win, reason) {
@@ -1208,7 +1388,9 @@ function placePanel(pad, w) {
 function openShop(i) {
   ui.sel = null; ui.panel = { kind: 'shop', pad: i };
   let h = `<div class="ph"><span>DEPLOY TO PAD ${i + 1}</span><button class="x" data-act="close">✕</button></div><div class="cards">`;
-  for (const k of ['ciws', 'patriot', 'himars']) {
+  const kinds = S.up.laser ? ['ciws', 'laser', 'patriot', 'himars'] : ['ciws', 'patriot', 'himars'];
+  h = h.replace('<div class="cards">', `<div class="cards" style="grid-template-columns:repeat(${kinds.length},1fr)">`);
+  for (const k of kinds) {
     const U = UNIT[k];
     h += `<button class="card" data-act="buy" data-unit="${k}"><img src="${ICONS[k]}" alt="">
       <div class="cn">${U.name}</div><div class="ctag">${U.tag}</div>
@@ -1217,7 +1399,7 @@ function openShop(i) {
       <div class="crole">${U.role}</div></button>`;
   }
   h += '</div>';
-  elPanel.innerHTML = h; placePanel(PADS[i], 620); refreshPanel();
+  elPanel.innerHTML = h; placePanel(PADS[i], kinds.length === 4 ? 800 : 620); refreshPanel();
 }
 function selectUnit(u) {
   ui.sel = u; ui.panel = { kind: 'unit', u };
@@ -1230,6 +1412,9 @@ function selectUnit(u) {
       <div class="hint">${u.mode === 'auto'
         ? '<span class="warn">⚠ AUTO fires $4M missiles at anything, including $20K drones and $5K decoys.</span>'
         : 'Engages only ballistic and cruise missiles. Leave drones to your CIWS.'}<br>Tip: while selected, click any threat to fire one missile manually.</div>`;
+  } else if (u.type === 'laser') {
+    h += `<div class="row"><span>COST</span><b>$1K / kill</b></div>
+      <div class="hint">Burns drones and cruise missiles inside its range. Cannot reach ballistic missiles. Ignores decoys.</div>`;
   } else if (u.type === 'ciws') {
     h += `<div class="row"><span>AMMO</span><b>$5K / burst</b></div>
       <div class="hint">Auto-engages Shahed drones and cruise missiles in its range circle. Cannot hit ballistic missiles. Ignores decoys.</div>`;
@@ -1246,6 +1431,7 @@ function refreshPanel() {
     elPanel.querySelectorAll('.card').forEach((c) => c.classList.toggle('off', S.treasury < UNIT[c.dataset.unit].build));
     return;
   }
+  if (ui.panel.kind === 'command') { refreshCommand(); return; }
   if (ui.panel.kind === 'carrier') {
     const el = document.getElementById('c-ready');
     if (el) { const re = S.carrier.slots.filter((x) => x.state === 'rearm').map((x) => Math.ceil(x.t)); el.textContent = `${jetsReady()} / ${AIR.jets}` + (re.length ? `  (rearm ${Math.min(...re)}s)` : ''); }
@@ -1288,6 +1474,10 @@ elPanel.addEventListener('click', (e) => {
     popup(u.x, u.y - 52, u.mode === 'auto' ? 'AUTO: ALL THREATS' : 'HEAVY ONLY', u.mode === 'auto' ? '#ffb36b' : '#7cffb2', 12);
     SFX.click(); selectUnit(u);
   } else if (act === 'sell' && ui.panel && ui.panel.u) sell(ui.panel.u);
+  else if (act === 'up') buyUpgrade(b.dataset.id);
+  else if (act === 'seize' && ui.panel && ui.panel.is) seizeIsland(ui.panel.is);
+  else if (act === 'op') launchOp(b.dataset.id);
+  else if (act === 'sandbox') { enableSandbox(!S.sandbox); openCommand(); }
 });
 
 function refreshButtons() {
@@ -1309,11 +1499,12 @@ document.getElementById('btnResume').addEventListener('click', () => togglePause
 elOverlay.addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.id === 'btnStart' || b.id === 'btnAgain') { SFX.init(); SFX.click(); startGame(); }
+  else if (b.id === 'btnSandbox') { SFX.init(); startGame(true); }
   else if (b.id === 'btnDemo') startDemo();
 });
 for (const el of [btnNext, btnPause, btnMute]) el.addEventListener('pointerdown', (e) => e.stopPropagation());
 
-function startGame() {
+function startGame(sandbox) {
   S = newState();
   parts = [];
   placeBunkers();
@@ -1323,6 +1514,7 @@ function startGame() {
   elOverlay.classList.add('hidden'); elPause.classList.add('hidden');
   closePanel(); refreshButtons();
   banner('DEPLOY YOUR DEFENSES', 'Click a concrete pad on your coast to build. $50M in the treasury.', '#5ad2ff', 4);
+  if (sandbox === true) enableSandbox(true);
 }
 
 function showReport() {
@@ -1341,7 +1533,7 @@ function showReport() {
   elOverlay.innerHTML = `<div class="box report">
     <div class="kicker">END-OF-WAR ECONOMIC REPORT</div>
     <h1 class="${win ? 'win' : 'lose'}">${win ? 'VICTORY' : 'DEFEAT'}</h1>
-    <p class="reason">${S.result.reason}</p>
+    <p class="reason">${S.result.reason}${S.sandbox ? ' <span class="amb">(sandbox: unlimited budget)</span>' : ''}</p>
     <div class="vs">
       <div><span>YOU SPENT</span><b class="red">${money(s.your)}</b></div>
       <div class="mid">${ratio ? ratio.toFixed(1) : '—'} : 1<small>COST-EXCHANGE RATIO</small></div>
@@ -1354,6 +1546,11 @@ function showReport() {
         ${row(`CIWS bursts ×${s.ciwsBursts}`, money(s.ciws))}
         ${row(`HIMARS salvos ×${s.salvos}`, money(s.himars))}
         ${row(`F-35 sorties ×${s.strikes + s.busters}`, money(s.air))}
+        ${row(`Laser kills ×${s.laserKills}`, money(s.laser))}
+        ${row('Upgrades', money(s.upgrades))}
+        ${row(`Islands seized \u00D7${s.seized}`, money(s.islands))}
+        ${row('Island income', '<span class="grn">+' + money(s.islandIncome) + '</span>')}
+        ${row(`Operations ×${s.opsRun}`, money(s.ops))}
         ${row('Income earned', '<span class="grn">+' + money(s.income) + '</span>')}
         ${row('Bounties &amp; bonuses', '<span class="grn">+' + money(s.bounty + s.bonus) + '</span>')}
       </table></div>
@@ -1416,6 +1613,7 @@ function jetsReady() { return S.carrier.slots.filter((s) => s.state === 'ready')
 function launchStrike(target, weapon) {
   const slot = S.carrier.slots.find((s) => s.state === 'ready');
   if (!slot) return false;
+  if (!canAfford(weapon === 'bunker' ? AIR.busterCost : AIR.strikeCost)) { noFunds(S.carrier.x, S.carrier.y - 60); return false; }
   const c = S.carrier;
   slot.state = 'flying';
   spend(weapon === 'bunker' ? AIR.busterCost : AIR.strikeCost, 'air');
@@ -1552,7 +1750,7 @@ function destroyBunker(B) {
   SFX.cash();
 }
 function placeBunkers() { S.bunkers.forEach((B, i) => { B.x = 210 + i * 430 + rand(-90, 90); B.y = Math.max(HUD_H + 26, enemyShore(B.x) - rand(58, 82)); }); }
-function revealSource(src) { if (src.kind === 'bunker') revealBunker(src); else revealLauncher(src); }
+function revealSource(src) { if (src.kind === 'island') return; if (src.kind === 'bunker') revealBunker(src); else revealLauncher(src); }
 function revealBunker(B) {
   if (!B.revealed) { B.revealed = true; B.pingT = 0; B.fade = 0; SFX.ping(); if (!B.known) popup(B.x, B.y - 34, 'UNDERGROUND BASE LOCATED', '#ffb347', 13, 2.2); }
   B.known = true; B.revealT = 12;
@@ -1624,6 +1822,7 @@ function worldToScreen(x, y) { return { x: (x - cam.x) * cam.z + W / 2, y: (y - 
 const PERSONAS = [
   { name: 'BALANCED', desc: 'mixes air defense with counter-strikes', order: [[2, 'ciws'], [3, 'patriot'], [4, 'himars'], [1, 'ciws'], [5, 'ciws'], [0, 'patriot']], reserve: 6e6, heavyFirst: false, busterAt: 14e6, strikeAt: 14e6 },
   { name: 'HUNTER', desc: 'goes after launchers and bases early', order: [[2, 'ciws'], [4, 'himars'], [3, 'patriot'], [1, 'ciws'], [5, 'himars'], [0, 'ciws']], reserve: 5e6, heavyFirst: false, busterAt: 10e6, strikeAt: 10e6 },
+  { name: 'ARSENAL', desc: 'unlimited budget, every weapon and operation in the inventory', sandbox: true, order: [[2, 'ciws'], [3, 'patriot'], [4, 'himars'], [1, 'laser'], [5, 'ciws'], [0, 'patriot']], reserve: 0, heavyFirst: false, busterAt: 0, strikeAt: 0 },
   { name: 'SHIELD', desc: 'builds a deep air-defense wall first', order: [[2, 'ciws'], [3, 'patriot'], [1, 'ciws'], [5, 'ciws'], [4, 'himars'], [0, 'patriot']], reserve: 8e6, heavyFirst: true, busterAt: 18e6, strikeAt: 18e6 },
 ];
 const D = { on: false, games: 0, offset: 0, persona: PERSONAS[0], actions: [], act: null, cur: { x: W / 2, y: H / 2, vis: false }, thinkT: 0, shot: null, shotT: 0, shotP: 0, letter: 0, fade: 0, fadeT: 0, endT: 0, seenWaste: 0, used: {}, manualT: 0 };
@@ -1698,8 +1897,9 @@ function aiThink() {
     say('COMMANDER', 'Underground missile base located. Sending an F-35 with a bunker buster: $20M, one shot.', 'amb');
     qWorld(c.x, c.y); qWorld(B.x, B.y); qDo(closePanel); return;
   }
-  // 3. Counter-strike an exposed launcher
-  const L = S.launchers.find((l) => l.alive && l.revealed && l.revealT > 3.2 && !S.rockets.some((r) => r.L === l) && !S.jets.some((j) => j.target === l));
+  // 3. Counter-strike an exposed launcher (the unlimited-budget showcase holds back so the show lasts)
+  const holdOff = pr.sandbox && S.wave < 8 && S.launchers.filter((l) => l.alive).length <= 3;
+  const L = holdOff ? null : S.launchers.find((l) => l.alive && l.revealed && l.revealT > 3.2 && !S.rockets.some((r) => r.L === l) && !S.jets.some((j) => j.target === l));
   if (L) {
     if (P2.some(himarsReady)) { say('COMMANDER', 'Launcher exposed. HIMARS salvo before it relocates.'); qWorld(L.x, L.y); return; }
     if (jetsReady() && S.treasury > pr.strikeAt) { say('COMMANDER', 'HIMARS is reloading. Launching an F-35 from the carrier instead.'); qWorld(c.x, c.y); qWorld(L.x, L.y); qDo(closePanel); return; }
@@ -1707,13 +1907,44 @@ function aiThink() {
   // 4. Build or rebuild
   for (const [pad, type] of pr.order) {
     if (P2[pad]) continue;
+    if (type === 'laser' && !S.up.laser) continue;
     if (S.treasury < UNIT[type].build + (S.wave === 0 ? 0 : pr.reserve)) break;
-    const lines = { ciws: 'a CIWS, the cheap answer to drone swarms.', patriot: 'a Patriot battery for the missile threat.', himars: 'a HIMARS to hunt the mobile launchers.' };
+    const lines = { laser: 'a laser turret: drones for about $1K a kill.', ciws: 'a CIWS, the cheap answer to drone swarms.', patriot: 'a Patriot battery for the missile threat.', himars: 'a HIMARS to hunt the mobile launchers.' };
     say('COMMANDER', `Deploying ${lines[type]}`);
     qWorld(PADS[pad].x, PADS[pad].y); qEl(`#panel .card[data-unit="${type}"]`);
     if (type === 'patriot' && pr.heavyFirst) { qEl('#panel [data-act="mode"]'); qDo(() => say('COMMANDER', 'Patriot set to HEAVY ONLY from the start. No $4M shots at drones.')); }
     qDo(closePanel);
     return;
+  }
+  // 4b. Upgrades, bought in order when there is money to spare
+  const upLines = { awacs: 'Buying an AWACS. It flags decoys, so Patriots stop wasting missiles.', ciwsRadar: 'Upgrading CIWS radars: more range, better aim.', pac3: 'Upgrading to PAC-3 interceptors: 99% hit chance, faster reload.', laser: 'Funding the high-energy laser program.', civil: 'Funding civil defense: tougher buildings that repair themselves.' };
+  for (const id of ['awacs', 'ciwsRadar', 'pac3', 'laser', 'civil']) {
+    if (S.up[id]) continue;
+    if (S.wave >= 1 && S.treasury >= UPGRADES[id].gate + pr.reserve && (pr.sandbox || Math.random() < 0.5)) {
+      say('COMMANDER', upLines[id], 'grn'); qDo(openCommand); qEl(`#panel .ucard[data-id="${id}"]`); qDo(closePanel); return;
+    }
+    break;
+  }
+  // 4d. Seize islands for extra income, then fortify them
+  const tIs = S.islands.filter((is) => is.owner !== 'player' && !S.assaults.some((a) => a.is === is)).sort((a, b) => a.cost - b.cost)[0];
+  if (tIs && S.wave >= 1 && S.treasury >= islandSeizeGate(tIs) + pr.reserve && (pr.sandbox || Math.random() < 0.4)) {
+    say('COMMANDER', `Seizing ${tIs.name}: its oil terminal pays +${money(tIs.value, true)} every 5 seconds.`, 'grn');
+    qWorld(tIs.x - tIs.rx * 0.5, tIs.y); qEl('#panel [data-act="seize"]'); qDo(closePanel); return;
+  }
+  const ip = PADS.findIndex((p, i) => p.island !== undefined && S.islands[p.island].owner === 'player' && !S.pads[i]);
+  if (ip >= 0 && S.treasury >= 6e6 + pr.reserve) {
+    const type = S.up.laser ? 'laser' : 'ciws';
+    say('COMMANDER', `Fortifying ${S.islands[PADS[ip].island].name} with a ${UNIT[type].short}.`);
+    qWorld(PADS[ip].x, PADS[ip].y); qEl(`#panel .card[data-unit="${type}"]`); qDo(closePanel); return;
+  }
+  // 4c. Preemptive operations
+  const opLines = { reaper: 'Sending an MQ-9 Reaper to hunt along their coast.', raid: 'Special forces raid on a hidden launcher. High risk, high reward.', tomahawk: 'Tomahawk strike from the destroyer on every launcher we can track.' };
+  if (S.mode === 'wave') for (const id of ['reaper', 'raid', 'tomahawk']) {
+    if ((S.opsCd[id] || 0) > 0 || S.treasury < OPS[id].gate + pr.reserve) continue;
+    if (id !== 'reaper' && !S.launchers.some((l) => l.alive)) continue;
+    if (holdOff) continue;
+    if (Math.random() > (pr.sandbox ? 0.3 : 0.1)) continue;
+    say('COMMANDER', opLines[id], 'amb'); qDo(openCommand); qEl(`#panel .ucard[data-id="${id}"]`); qDo(closePanel); return;
   }
   // 5. Manual Patriot shot on a cruise missile closing in
   const pat = P2.find((u) => u && u.type === 'patriot' && u.tubes.includes(1));
@@ -1746,13 +1977,18 @@ function directorTick(dt) {
   for (const b of S.bombs) if (b.kind === 'bunker' && !b.cw) cands.push([11, b, 1.8, 3, 'cw']);
   for (const r of S.rockets) if (!r.salvo.cw) cands.push([7, r, 1.25, 2.4, 'salvo']);
   for (const m of S.missiles) if (m.phase === 'guide' && m.target && m.target.type === 'cruise' && !m.cw) cands.push([5, m, 1.45, 2.2, 'cw']);
+  for (const r of S.raids) { if (r.phase === 'out' && !r.cw1 && r.t > 0.5) cands.push([8, r, 1.6, 3, 'cw1']); else if (r.phase === 'fight' && !r.cw2) cands.push([10, r, 2.0, 4.5, 'cw2']); }
+  for (const m of S.toms) if (!m.cw && m.phase === 'cruise') cands.push([8, m, 1.4, 3, 'cw']);
+  for (const r of S.reapers) if (!r.cw) cands.push([6, r, 1.6, 3, 'cw']);
+  for (const a of S.assaults) { if (a.phase === 'out' && !a.cw1 && a.t > 1) cands.push([8, a.boats[0], 1.7, 3, 'cw1']); else if (a.phase === 'fight' && !a.cw2) cands.push([9, { x: a.is.x, y: a.is.y }, 1.9, 3.5, null]); if (a.phase === 'fight') a.cw2 = true; }
+  for (const u of S.pads) if (u && u.type === 'laser' && u.firing && u.target && !u.target.cw) cands.push([6, u.target, 1.9, 1.6, 'cw']);
   if (!cands.length) {
     if (cam.tz > 1.01 || cam.follow) camTo(W / 2, H / 2, 1);
     D.shot = {}; D.shotT = 1.2; D.shotP = 0; return;
   }
   cands.sort((a, b) => b[0] - a[0]);
   const [p, o, z, hold, flag] = cands[0];
-  if (flag === 'salvo') o.salvo.cw = true; else o[flag] = true;
+  if (flag === 'salvo') o.salvo.cw = true; else if (flag) o[flag] = true;
   camFollow(o, z); D.shot = o; D.shotT = hold; D.shotP = p;
 }
 function demoTick(dt) {
@@ -1775,6 +2011,7 @@ function newDemoGame() {
   D.games++;
   D.persona = PERSONAS[(D.games - 1 + D.offset) % PERSONAS.length];
   S = newState(); parts = []; S.demo = true;
+  if (D.persona.sandbox) { S.sandbox = true; S.treasury = 1e12; }
   placeBunkers(); for (const L of S.launchers) placeLauncher(L);
   S.mode = 'prep'; S.prepT = 14;
   closePanel(); camReset();
@@ -1813,7 +2050,7 @@ function drawDemoBars() {
   ctx.font = '600 10px ' + FONT; ctx.fillStyle = '#8fa9b8'; ctx.fillText(`GAME ${D.games} · ${D.persona.name} STRATEGY`, 30, 37);
   const s = S.stats, ratio = s.enemy > 0 ? s.your / s.enemy : 0;
   const items = [
-    ['WAVE', `${S.wave} / 10`, '#ffffff', 84], ['TREASURY', money(S.treasury), S.treasury < 0 ? '#ff4d4d' : '#7cffb2', 112],
+    ['WAVE', `${S.wave} / 10`, '#ffffff', 84], ['TREASURY', treasuryText(), S.sandbox ? '#ffd36b' : S.treasury < 0 ? '#ff4d4d' : '#7cffb2', 112],
     ['DEFENSE SPENT', money(s.your), '#ff6b5a', 122], ['ATTACKER SPENT', money(s.enemy), '#ffc04d', 122], ['COST RATIO', ratio ? ratio.toFixed(1) + ' : 1' : '—', '#ffffff', 100],
   ];
   let x = 218;
@@ -1821,6 +2058,315 @@ function drawDemoBars() {
     ctx.font = '700 9px ' + FONT; ctx.fillStyle = '#5f8fa8'; ctx.fillText(l, x, 18);
     ctx.font = '700 15px ' + MONO; ctx.fillStyle = c; ctx.fillText(v, x, 37); x += w;
   }
+}
+
+// ============================== COMMAND: UPGRADES, OPERATIONS, SANDBOX ==============================
+const UPGRADES = {
+  awacs: { name: 'AWACS RADAR PLANE', cost: 15e6, gate: 22e6, desc: 'Flags every decoy. Patriots on AUTO stop firing at decoys and at drones your CIWS or laser will catch. Launchers stay exposed 4 s longer.' },
+  ciwsRadar: { name: 'CIWS RADAR UPGRADE', cost: 5e6, gate: 8e6, desc: 'CIWS range +35% and much better accuracy against drones and cruise missiles.' },
+  pac3: { name: 'PATRIOT PAC-3 MSE', cost: 14e6, gate: 20e6, desc: 'Patriot hit chance 99%, reload 35% faster, faster interceptors.' },
+  laser: { name: 'HIGH-ENERGY LASER', cost: 18e6, gate: 28e6, desc: 'Unlocks the LASER turret in the build menu: about $1K per kill against drones and cruise missiles.' },
+  civil: { name: 'CIVIL DEFENSE', cost: 10e6, gate: 15e6, desc: 'Coastal buildings take 35% less damage and slowly repair while still standing.' },
+};
+const OPS = {
+  reaper: { name: 'MQ-9 REAPER PATROL', cost: 6e6, gate: 10e6, cd: 35, desc: 'A drone sweeps the enemy coast for 60 s. It exposes launchers and bases it passes and fires Hellfire missiles at launchers.' },
+  raid: { name: 'SPECIAL FORCES RAID', cost: 12e6, gate: 25e6, cd: 45, desc: 'Helicopters drop a commando team on a hidden launcher. 80% chance to destroy it. 20% chance a helicopter is lost.' },
+  tomahawk: { name: 'TOMAHAWK STRIKE', cost: 16e6, gate: 32e6, cd: 40, desc: 'Your destroyer fires 5 satellite-guided cruise missiles at the launchers, hidden or not. 4 armor damage each.' },
+};
+const DESTROYER = { x: 1085, y: 512 };
+const REAPER = [[12, 0], [3, 1.4], [1, 15], [-2, 15], [-2, 1.4], [-9, 1], [-12, 5], [-13, 4], [-11, 0], [-13, -4], [-12, -5], [-9, -1], [-2, -1.4], [-2, -15], [1, -15], [3, -1.4]];
+const AWACS = [[22, 0], [17, 2.6], [4, 3], [-2, 22], [-7, 22], [-6, 3], [-16, 2.6], [-21, 9], [-24, 9], [-22, 0], [-24, -9], [-21, -9], [-16, -2.6], [-6, -3], [-7, -22], [-2, -22], [4, -3], [17, -2.6]];
+
+function treasuryText() { return S.sandbox ? 'UNLIMITED' : money(S.treasury); }
+function enableSandbox(on) {
+  S.sandbox = on;
+  if (on) { S.treasury = 1e12; banner('SANDBOX: UNLIMITED BUDGET', 'Every weapon, upgrade and operation is free to use. The burn tracker still counts the real cost.', '#ffd36b', 3.5); }
+  else { S.treasury = 50e6; banner('SANDBOX OFF', 'Back to a real budget: $50M.', '#8fdcff', 2.5); }
+  SFX.cash(); refreshPanel();
+}
+function ciwsRange() { return UNIT.ciws.range * (S.up.ciwsRadar ? 1.35 : 1); }
+function coveredByGuns(t) {
+  for (const u of S.pads) {
+    if (!u || (u.type !== 'ciws' && u.type !== 'laser')) continue;
+    const R = u.type === 'laser' ? UNIT.laser.range : ciwsRange();
+    if (dist(u.x, u.y, t.tx, t.ty) < R + 10) return true;
+  }
+  return false;
+}
+function awacsSkips(t) { return S.up.awacs && (t.type === 'decoy' || (t.type === 'drone' && coveredByGuns(t))); }
+
+function buyUpgrade(id) {
+  const U = UPGRADES[id];
+  if (!U || S.up[id]) return;
+  if (S.treasury < U.gate) { SFX.err(); popup(W / 2, 150, `NEEDS ${money(U.gate, true)} ON HAND`, '#ffcf6b', 14); return; }
+  spend(U.cost, 'upgrades'); S.up[id] = true;
+  banner(`${U.name} ONLINE`, U.desc, '#7cffb2', 3.5); SFX.build();
+  if (id === 'awacs') { S.awacsA = 0; }
+  refreshPanel();
+}
+function launchOp(id) {
+  const O = OPS[id];
+  if (!O || (S.opsCd[id] || 0) > 0) return;
+  if (S.treasury < O.gate) { SFX.err(); popup(W / 2, 150, `NEEDS ${money(O.gate, true)} ON HAND`, '#ffcf6b', 14); return; }
+  const alive = S.launchers.filter((l) => l.alive);
+  if ((id === 'raid' || id === 'tomahawk') && !alive.length) { SFX.err(); popup(W / 2, 150, 'NO LAUNCHERS LEFT', '#ffcf6b', 14); return; }
+  spend(O.cost, 'ops'); S.opsCd[id] = O.cd; S.stats.opsRun++;
+  if (id === 'reaper') {
+    S.reapers.push({ x: -40, y: 112, dir: 1, t: 60, hellT: 3, sx: -40, sy: 112, z: 70, ang: 0 });
+    banner('MQ-9 REAPER ON PATROL', 'Sweeping the enemy coast for 60 seconds.', '#8fdcff', 2.6);
+  } else if (id === 'raid') {
+    const L = alive.slice().sort((a, b) => a.hp - b.hp)[0];
+    const c = S.carrier;
+    S.raids.push({ L, phase: 'out', x: c.x + 20, y: c.y - 30, z: 0, t: 0, ang: -0.6, spin: 0, success: Math.random() < 0.8, sx: c.x, sy: c.y });
+    banner('SPECIAL FORCES RAID', 'Helicopters inbound to a hidden launcher.', '#8fdcff', 2.6);
+  } else if (id === 'tomahawk') {
+    for (let i = 0; i < 5; i++) {
+      const L = alive[i % alive.length];
+      later(i * 0.35, () => fireTomahawk(L));
+    }
+    banner('TOMAHAWK STRIKE', '5 cruise missiles launched from the destroyer.', '#8fdcff', 2.6);
+  }
+  SFX.click(); refreshPanel();
+}
+function fireTomahawk(L) {
+  const x = DESTROYER.x + rand(-18, 18), y = DESTROYER.y - 2;
+  S.toms.push({ L, x, y, z: 0, phase: 'boost', t: 0, ang: -Math.PI / 2, spd: 60, acc: 0, sx: x, sy: y, tx: L.x, ty: L.y });
+  light(x, y, 50, 0.3, 0.9); SFX.patriot();
+  for (let k = 0; k < 6; k++) puff(x, y, { spr: SPR.smoke, s0: 4, s1: 18, a0: 0.5, life: rand(1.5, 2.4), vx: rand(-20, 20), vy: rand(-10, 10) });
+}
+function updTomahawks(dt) {
+  for (const m of S.toms) {
+    m.t += dt;
+    if (m.phase === 'boost') {
+      m.z += 120 * dt; if (m.t > 0.6) { m.phase = 'cruise'; m.ang = Math.atan2(m.ty - m.y, m.tx - m.x); }
+    } else {
+      if (m.L.alive) { m.tx = m.L.x; m.ty = m.L.y; }
+      const da = Math.atan2(m.ty - m.y, m.tx - m.x);
+      m.ang = turnToward(m.ang, da, 2.4 * dt);
+      m.spd = Math.min(280, m.spd + 260 * dt);
+      m.x += Math.cos(m.ang) * m.spd * dt; m.y += Math.sin(m.ang) * m.spd * dt;
+      m.z += (28 - m.z) * Math.min(1, dt * 1.5);
+      if (dist(m.x, m.y, m.tx, m.ty) < 10) {
+        m.dead = true; explode(m.tx, m.ty, 2.2);
+        if (m.L.alive && dist(m.tx, m.ty, m.L.x, m.L.y) < 30) { m.L.hp -= 4; if (m.L.hp <= 0) destroyLauncher(m.L); else popup(m.L.x, m.L.y - 30, `TOMAHAWK HIT: ARMOR ${Math.ceil(m.L.hp)}/${m.L.max}`, '#ffcf6b', 12); }
+        continue;
+      }
+    }
+    m.sx = m.x; m.sy = m.y - m.z;
+    m.acc += dt;
+    while (m.acc > 0.02) { m.acc -= 0.02; P({ k: 'soft', spr: SPR.smoke, x: m.sx - Math.cos(m.ang) * 7, y: m.sy - Math.sin(m.ang) * 7, vx: rand(-3, 3), vy: rand(-3, 3), wind: 3, drag: 0.6, life: rand(1.2, 1.8), s0: 2, s1: 9, a0: 0.35, fadeIn: true }); }
+    if (m.t > 14) m.dead = true;
+  }
+  S.toms = S.toms.filter((m) => !m.dead);
+}
+function updReapers(dt) {
+  for (const r of S.reapers) {
+    r.t -= dt;
+    if (r.t > 0) {
+      r.x += r.dir * 75 * dt;
+      if (r.x > W - 40) r.dir = -1; if (r.x < 40 && r.t < 58) r.dir = 1;
+      r.y = 112 + Math.sin(S.time * 0.9) * 16;
+    } else { r.y -= 80 * dt; r.x += r.dir * 40 * dt; if (r.y < -40) r.dead = true; }
+    r.ang = r.t > 0 ? (r.dir > 0 ? 0 : Math.PI) : -Math.PI / 2;
+    r.sx = r.x; r.sy = r.y - r.z;
+    for (const L of S.launchers) if (L.alive && !L.revealed && dist(r.x, r.y, L.x, L.y) < 95) { revealLauncher(L); popup(L.x, L.y - 30, 'REAPER: LAUNCHER SPOTTED', '#8fdcff', 12); }
+    for (const B of S.bunkers) if (B.alive && !B.known && dist(r.x, r.y, B.x, B.y) < 95) revealBunker(B);
+    r.hellT -= dt;
+    if (r.hellT <= 0 && r.t > 0) {
+      const L = S.launchers.find((l) => l.alive && l.revealed && dist(l.x, l.y, r.x, r.y) < 280);
+      if (L) { r.hellT = 5; S.hellfires.push({ x0: r.sx, y0: r.sy, L, gen: L.gen, T: 0, tx: L.x, ty: L.y, sx: r.sx, sy: r.sy }); SFX.rocket(); }
+    }
+  }
+  S.reapers = S.reapers.filter((r) => !r.dead);
+  for (const h of S.hellfires) {
+    h.T += dt / 0.8;
+    const T = Math.min(1, h.T);
+    h.sx = lerp(h.x0, h.tx, T); h.sy = lerp(h.y0, h.ty, T);
+    P({ k: 'soft', spr: SPR.grey, x: h.sx, y: h.sy, life: 0.8, s0: 1.5, s1: 6, a0: 0.4 });
+    if (h.T >= 1) {
+      h.dead = true; explode(h.tx, h.ty, 1.3);
+      if (h.L.alive && h.L.gen === h.gen) { h.L.hp -= 2; if (h.L.hp <= 0) destroyLauncher(h.L); else popup(h.L.x, h.L.y - 30, `HELLFIRE HIT: ARMOR ${Math.ceil(h.L.hp)}/${h.L.max}`, '#ffcf6b', 12); }
+    }
+  }
+  S.hellfires = S.hellfires.filter((h) => !h.dead);
+}
+function updRaids(dt) {
+  const c = S.carrier;
+  for (const r of S.raids) {
+    r.t += dt; r.spin += dt * 30;
+    const L = r.L;
+    if (r.phase === 'out') {
+      const tx = L.alive ? L.x + 34 : r.x, ty = L.alive ? L.y + 26 : r.y;
+      r.ang = Math.atan2(ty - r.y, tx - r.x);
+      const d = dist(r.x, r.y, tx, ty);
+      r.x += Math.cos(r.ang) * Math.min(d, 150 * dt); r.y += Math.sin(r.ang) * Math.min(d, 150 * dt);
+      r.z += (45 - r.z) * Math.min(1, dt * 2);
+      if (!L.alive) r.phase = 'back';
+      else if (d < 4) { r.phase = 'fight'; r.ft = 0; r.gx = L.x; r.gy = L.y; popup(L.x, L.y - 40, 'COMMANDOS ON THE GROUND', '#8fdcff', 13); revealLauncher(L); }
+    } else if (r.phase === 'fight') {
+      r.z = Math.max(4, r.z - 40 * dt); r.ft += dt;
+      if (Math.random() < 0.5) {
+        const a = rand(0, TAU), sx = r.x + rand(-14, 6), sy = r.y + rand(-8, 8);
+        P({ k: 'line', add: true, c: 'rgb(255,230,140)', w: 1.2, len: 0.02, x: sx, y: sy, vx: (r.gx - sx) * 3 + Math.cos(a) * 30, vy: (r.gy - sy) * 3 + Math.sin(a) * 30, life: 0.3 });
+        if (Math.random() < 0.3) P({ k: 'line', add: true, c: 'rgb(255,120,90)', w: 1.2, len: 0.02, x: r.gx, y: r.gy, vx: (sx - r.gx) * 3, vy: (sy - r.gy) * 3, life: 0.3 });
+      }
+      if (Math.random() < 0.04) explode(r.gx + rand(-10, 10), r.gy + rand(-8, 8), 0.6);
+      if (r.ft > 5) {
+        if (r.success && L.alive) { explode(L.x, L.y, 2.5); destroyLauncher(L); popup(L.x, L.y - 56, 'RAID SUCCESSFUL', '#7cffb2', 15); }
+        else if (!r.success) { r.lost = true; explode(r.x, r.y - r.z, 2.4, true); popup(r.x, r.y - 50, 'HELICOPTER LOST: RAID FAILED', '#ff4d4d', 15); S.stats.raidLosses++; spend(8e6, 'ops'); }
+        r.phase = 'back';
+      }
+    } else {
+      const tx = c.x + 30, ty = c.y - 6;
+      r.ang = Math.atan2(ty - r.y, tx - r.x);
+      const d = dist(r.x, r.y, tx, ty);
+      r.x += Math.cos(r.ang) * Math.min(d, 160 * dt); r.y += Math.sin(r.ang) * Math.min(d, 160 * dt);
+      r.z += (40 - r.z) * Math.min(1, dt * 2);
+      if (d < 6) r.dead = true;
+    }
+    r.sx = r.x; r.sy = r.y - r.z;
+  }
+  S.raids = S.raids.filter((r) => !r.dead);
+}
+function drawHeli(g, x, y, ang, spin, shadow) {
+  g.save(); g.translate(x, y); g.rotate(ang);
+  g.fillStyle = shadow ? 'rgba(0,0,0,0.28)' : '#4b553f';
+  g.beginPath(); g.ellipse(2, 0, 9, 4.2, 0, 0, TAU); g.fill();
+  g.fillRect(-16, -1.2, 12, 2.4); g.fillRect(-17, -3.5, 2.5, 7);
+  if (!shadow) {
+    g.fillStyle = 'rgba(150,200,220,0.6)'; g.beginPath(); g.ellipse(7, 0, 2.6, 2.4, 0, 0, TAU); g.fill();
+    g.fillStyle = 'rgba(200,210,215,0.18)'; g.beginPath(); g.arc(1, 0, 15, 0, TAU); g.fill();
+    g.strokeStyle = 'rgba(30,34,36,0.75)'; g.lineWidth = 1.6;
+    for (let i = 0; i < 4; i++) { const a = spin + i * Math.PI / 2; g.beginPath(); g.moveTo(1, 0); g.lineTo(1 + Math.cos(a) * 15, Math.sin(a) * 15); g.stroke(); }
+  }
+  g.restore();
+}
+function drawOpsAir(shadow) {
+  for (const r of S.raids) {
+    if (r.lost && r.phase === 'back') { drawHeliPair(r, shadow, 1); continue; }
+    drawHeliPair(r, shadow, 2);
+  }
+  for (const r of S.reapers) {
+    ctx.save();
+    if (shadow) { ctx.translate(r.x + 2, r.y + 2); ctx.rotate(r.ang); pathShape(ctx, REAPER, 1); ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.fill(); }
+    else { ctx.translate(r.sx, r.sy); ctx.rotate(r.ang); pathShape(ctx, REAPER, 1); ctx.fillStyle = '#9aa2a8'; ctx.fill(); ctx.strokeStyle = '#2b3135'; ctx.lineWidth = 0.7; ctx.stroke(); }
+    ctx.restore();
+  }
+  for (const h of S.hellfires) if (!shadow) { ctx.fillStyle = '#e8eaeb'; ctx.fillRect(h.sx - 1.5, h.sy - 1.5, 3, 3); }
+  for (const m of S.toms) {
+    if (shadow) { ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(m.x, m.y, 5, 2, 0, 0, TAU); ctx.fill(); continue; }
+    ctx.save(); ctx.translate(m.sx, m.sy); ctx.rotate(m.phase === 'boost' ? -Math.PI / 2 : m.ang);
+    ctx.fillStyle = '#dfe3e5'; rr(ctx, -8, -1.8, 16, 3.6, 1.8); ctx.fill(); ctx.fillStyle = '#9aa1a5'; ctx.fillRect(-2, -5, 3, 10);
+    ctx.restore();
+  }
+  if (S.up.awacs) {
+    const a = S.awacsA, x = 640 + Math.cos(a) * 330, y = 330 + Math.sin(a) * 120, ang = a + Math.PI / 2;
+    if (shadow) { ctx.save(); ctx.translate(x + 40, y + 80); ctx.rotate(ang); pathShape(ctx, AWACS, 1.1); ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fill(); ctx.restore(); }
+    else {
+      ctx.save(); ctx.translate(x, y); ctx.rotate(ang); pathShape(ctx, AWACS, 1.1); ctx.fillStyle = '#b4bcc2'; ctx.fill(); ctx.strokeStyle = '#3a4248'; ctx.lineWidth = 0.8; ctx.stroke();
+      ctx.rotate(S.time * 2); ctx.fillStyle = '#5a646b'; ctx.beginPath(); ctx.ellipse(-2, 0, 8, 8, 0, 0, TAU); ctx.fill(); ctx.fillStyle = '#e8ecee'; ctx.fillRect(-10, -1, 16, 2);
+      ctx.restore();
+    }
+  }
+}
+function drawHeliPair(r, shadow, n) {
+  for (let i = 0; i < n; i++) {
+    const ox = i ? -22 : 0, oy = i ? 16 : 0;
+    if (shadow) drawHeli(ctx, r.x + ox + 3, r.y + oy + 3, r.ang, r.spin, true);
+    else drawHeli(ctx, r.sx + ox, r.sy + oy, r.ang, r.spin + i, false);
+  }
+}
+function opsGlows(g) {
+  for (const m of S.toms) { const c = Math.cos(m.phase === 'boost' ? -Math.PI / 2 : m.ang), s = Math.sin(m.phase === 'boost' ? -Math.PI / 2 : m.ang); g(SPR.fire, m.sx - c * 9, m.sy - s * 9, 5 + Math.random() * 2, 0.95); }
+  for (const h of S.hellfires) g(SPR.fire, h.sx, h.sy, 4, 0.9);
+  for (const r of S.raids) if (Math.sin(S.time * 10) > 0.6) g(SPR.red, r.sx, r.sy, 3, 0.9);
+}
+function drawDestroyer() {
+  ctx.save(); ctx.translate(DESTROYER.x, DESTROYER.y);
+  ctx.strokeStyle = 'rgba(200,230,245,0.12)'; ctx.lineWidth = 1.2;
+  for (let i = 1; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(-46, 0); ctx.lineTo(-46 - 34 * i, -6 * i); ctx.moveTo(-46, 0); ctx.lineTo(-46 - 34 * i, 6 * i); ctx.stroke(); }
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.moveTo(52, 4); ctx.lineTo(30, -4); ctx.lineTo(-42, -4); ctx.lineTo(-42, 12); ctx.lineTo(30, 12); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#4a535b'; ctx.beginPath(); ctx.moveTo(50, 0); ctx.lineTo(28, -8); ctx.lineTo(-46, -8); ctx.lineTo(-46, 8); ctx.lineTo(28, 8); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#5d6770'; ctx.fillRect(-14, -5, 24, 10); ctx.fillStyle = '#6f7a83'; ctx.fillRect(-6, -4, 10, 8);
+  ctx.fillStyle = '#2c3237'; for (let i = 0; i < 4; i++) ctx.fillRect(16 + i * 4, -3, 3, 6);
+  ctx.fillStyle = '#3a4248'; ctx.fillRect(-36, -3, 10, 6);
+  ctx.font = '700 9px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(143,220,255,0.6)'; ctx.fillText('DESTROYER', 0, -14);
+  ctx.restore();
+}
+
+// ---- Laser turret ----
+function drawLaserUnit(g, u) {
+  g.save(); g.translate(u.x, u.y);
+  g.fillStyle = 'rgba(0,0,0,0.4)'; circle(g, 3, 4, 18);
+  g.fillStyle = '#3d454b'; rr(g, -17, -17, 34, 34, 6); g.fill(); g.strokeStyle = '#22282c'; g.lineWidth = 1.5; g.stroke();
+  g.fillStyle = '#2a3035'; circle(g, 0, 0, 11);
+  g.translate(0, -6); g.rotate(u.aim);
+  g.fillStyle = '#59636a'; g.fillRect(-9, -8, 18, 16);
+  g.fillStyle = '#2a3035'; g.fillRect(6, -4, 12, 8);
+  g.fillStyle = '#9fe9ff'; circle(g, 18, 0, 3.4); g.fillStyle = '#ffffff'; circle(g, 18, 0, 1.6);
+  g.fillStyle = '#7d8a92'; g.fillRect(-7, -6, 6, 12);
+  g.restore();
+}
+function updLaser(u, dt) {
+  u.cd -= dt;
+  const R = UNIT.laser.range, ox = u.x, oy = u.y - 6;
+  let t = u.target;
+  if (!t || !t.alive || dist(ox, oy, t.sx, t.sy) > R) {
+    u.target = null; u.burn = 0; let bd = 1e9;
+    for (const q of S.threats) {
+      if (!q.alive || (q.type !== 'drone' && q.type !== 'cruise') || q.lased) continue;
+      const d = dist(ox, oy, q.sx, q.sy); if (d < R && d < bd) { bd = d; u.target = q; }
+    }
+    t = u.target; if (t) t.lased = true;
+  }
+  if (!t) { u.aim += Math.sin(S.time * 0.6 + u.pad) * 0.3 * dt; return; }
+  const ta = Math.atan2(t.sy - oy, t.sx - ox);
+  u.aim = turnToward(u.aim, ta, 8 * dt);
+  if (u.cd > 0 || Math.abs(angDiff(u.aim, ta)) > 0.1) return;
+  if (!canAfford(UNIT.laser.shot)) { noFunds(u.x, u.y - 40); return; }
+  u.burn += dt; u.firing = true;
+  SFX.laser();
+  if (Math.random() < 0.5) P({ k: 'line', add: true, c: 'rgb(200,250,255)', w: 1, len: 0.02, x: t.sx, y: t.sy, vx: rand(-120, 120), vy: rand(-120, 120), drag: 4, life: 0.25 });
+  if (u.burn >= (t.type === 'cruise' ? 1.1 : 0.45)) {
+    spend(UNIT.laser.shot, 'laser'); t.spent += UNIT.laser.shot; S.stats.laserKills++;
+    killThreat(t, 'laser'); u.target = null; u.burn = 0; u.cd = 0.25; u.firing = false;
+  }
+}
+function laserGlows(g) {
+  for (const u of S.pads) {
+    if (!u || u.type !== 'laser' || !u.target || !u.firing || !u.target.alive) { if (u && u.type === 'laser') u.firing = false; continue; }
+    const t = u.target, ox = u.x + Math.cos(u.aim) * 18, oy = u.y - 6 + Math.sin(u.aim) * 18;
+    ctx.globalAlpha = 0.55; ctx.strokeStyle = 'rgb(90,220,255)'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(t.sx, t.sy); ctx.stroke();
+    ctx.globalAlpha = 0.95; ctx.strokeStyle = 'rgb(235,255,255)'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(t.sx, t.sy); ctx.stroke();
+    g(SPR.cyan, ox, oy, 10, 0.9); g(SPR.white, t.sx, t.sy, 6 + Math.random() * 3, 1); g(SPR.cyan, t.sx, t.sy, 18, 0.7);
+  }
+}
+
+// ---- Command panel ----
+function openCommand() {
+  ui.sel = null; ui.panel = { kind: 'command' };
+  let h = `<div class="ph"><span>COMMAND CENTER</span><button class="x" data-act="close">✕</button></div>
+    <div class="sect">UPGRADES <i>one-time purchases. You need the listed amount on hand to authorize them.</i></div><div class="ucards">`;
+  for (const [id, U] of Object.entries(UPGRADES)) h += `<button class="ucard" data-act="up" data-id="${id}"><b>${U.name}</b><span class="uc">${money(U.cost, true)}</span><span class="ug" data-g="${id}"></span><p>${U.desc}</p></button>`;
+  h += `</div><div class="sect">OFFENSIVE OPERATIONS <i>preemptive strikes on the enemy side. Reusable after a cooldown.</i></div><div class="ucards ops">`;
+  for (const [id, O] of Object.entries(OPS)) h += `<button class="ucard" data-act="op" data-id="${id}"><b>${O.name}</b><span class="uc">${money(O.cost, true)}</span><span class="ug" data-g="${id}"></span><p>${O.desc}</p></button>`;
+  h += `</div><div class="sbx"><button class="btn sell" data-act="sandbox">${S.sandbox ? 'TURN SANDBOX OFF' : 'SANDBOX: UNLIMITED BUDGET'}</button></div>`;
+  elPanel.innerHTML = h;
+  elPanel.style.width = '940px'; elPanel.style.left = '170px'; elPanel.style.bottom = '96px';
+  elPanel.classList.remove('hidden'); refreshPanel();
+}
+function refreshCommand() {
+  elPanel.querySelectorAll('.ucard').forEach((c) => {
+    const id = c.dataset.id, isUp = c.dataset.act === 'up', D2 = isUp ? UPGRADES[id] : OPS[id];
+    const g = c.querySelector('.ug');
+    let st, cls;
+    if (isUp && S.up[id]) { st = 'ACTIVE'; cls = 'own'; }
+    else if (!isUp && (S.opsCd[id] || 0) > 0) { st = `READY IN ${Math.ceil(S.opsCd[id])}s`; cls = 'cd'; }
+    else if (S.treasury < D2.gate) { st = `LOCKED: NEED ${money(D2.gate, true)} ON HAND`; cls = 'lock'; }
+    else { st = isUp ? 'AUTHORIZE' : 'LAUNCH'; cls = 'ok'; }
+    if (g.textContent !== st) g.textContent = st;
+    c.className = 'ucard ' + cls;
+  });
 }
 
 // ============================== INPUT ==============================
@@ -1831,7 +2377,7 @@ function threatAt(x, y) {
   return best;
 }
 function launcherAt(x, y) { return S.launchers.find((L) => L.alive && L.revealed && dist(x, y, L.x, L.y) < 30) || null; }
-function padAt(x, y) { return PADS.findIndex((p) => Math.abs(x - p.x) < 36 && Math.abs(y - p.y) < 30); }
+function padAt(x, y) { return PADS.findIndex((p, i) => padUsable(i) && Math.abs(x - p.x) < 36 && Math.abs(y - p.y) < 30); }
 
 cv.addEventListener('pointermove', (e) => {
   const p = toLocal(e); ui.mx = p.x; ui.my = p.y;
@@ -1850,7 +2396,8 @@ function handleWorldClick(x, y) {
   if (ui.sel && ui.sel.type === 'patriot' && !ui.sel.dead) {
     const t = threatAt(x, y);
     if (t) {
-      if (!firePatriot(ui.sel, t, true)) { SFX.err(); popup(ui.sel.x, ui.sel.y - 52, 'RELOADING', '#ffcf6b', 12); }
+      const fr = firePatriot(ui.sel, t, true);
+      if (fr !== true) { SFX.err(); if (fr === false) popup(ui.sel.x, ui.sel.y - 52, 'RELOADING', '#ffcf6b', 12); }
       else refreshPanel();
       return;
     }
@@ -1876,12 +2423,16 @@ function handleWorldClick(x, y) {
   if (carrierAt(x, y)) { SFX.click(); selectCarrier(); return; }
   const i = padAt(x, y);
   if (i >= 0) { SFX.click(); if (S.pads[i]) selectUnit(S.pads[i]); else openShop(i); return; }
+  const isl = islandAt(x, y);
+  if (isl) { SFX.click(); selectIsland(isl); return; }
   if (ui.panel) closePanel();
 }
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (D.on) { SFX.init(); if (k === 'escape') stopDemo(false); else if (k === 'm') toggleMute(); return; }
+  if (k.length === 1) { ui.code = ((ui.code || '') + k).slice(-12); if (ui.code.endsWith('money') && (S.mode === 'prep' || S.mode === 'wave')) { enableSandbox(!S.sandbox); return; } }
   if (k === 'm') { SFX.init(); toggleMute(); }
+  else if (k === 'c' && (S.mode === 'prep' || S.mode === 'wave')) { SFX.click(); if (ui.panel && ui.panel.kind === 'command') closePanel(); else openCommand(); }
   else if (k === 'escape' && ui.panel) closePanel();
   else if (k === 'p' || k === 'escape') togglePause();
   else if (k === 'n') nextWaveNow();
@@ -1942,6 +2493,7 @@ function drawPads() {
   const hoverI = padAt(ui.mx, ui.my);
   const hintPulse = S.mode === 'prep' && S.wave === 0 && !S.pads.some(Boolean);
   PADS.forEach((p, i) => {
+    if (!padUsable(i)) return;
     const u = S.pads[i];
     ctx.save(); ctx.translate(p.x, p.y);
     ctx.fillStyle = 'rgba(0,0,0,0.4)'; rr(ctx, -31, -23, 68, 54, 4); ctx.fill();
@@ -2005,6 +2557,8 @@ function drawThreatShadows() {
   for (const r of S.rockets) { ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.beginPath(); ctx.ellipse(r.gx, r.gy, 4, 2, 0, 0, TAU); ctx.fill(); }
   for (const j of S.jets) drawF35(ctx, j.x + 2, j.y + 2, j.ang, 1.05, 1, true);
   drawBombs(true);
+  drawOpsAir(true);
+  drawAssaults(true);
 }
 function drawThreatBodies() {
   for (const t of S.threats) {
@@ -2079,9 +2633,16 @@ function drawGlows() {
     if (Math.sin(S.time * 9 + j.t) > 0.7) { g(SPR.red, j.sx - s * 9.5, j.sy + c * 9.5, 3, 0.9); g(SPR.cyan, j.sx + s * 9.5, j.sy - c * 9.5, 3, 0.9); }
   }
   for (const B of S.bunkers) if (B.alive && B.revealed) g(SPR.fire, B.x, B.y, 40, 0.2 * Math.min(1, B.fade));
+  opsGlows(g);
+  laserGlows(g);
   ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
 }
 function drawWarnings() {
+  if (S.up.awacs) for (const t of S.threats) if (t.type === 'decoy') {
+    ctx.strokeStyle = 'rgba(160,175,185,0.7)'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.arc(t.sx, t.sy, 12, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = '700 8px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(170,185,195,0.9)'; ctx.fillText('DECOY', t.sx, t.sy - 15);
+  }
   for (const t of S.threats) {
     if (t.type !== 'ballistic') continue;
     const rem = Math.max(0, (1 - t.T) * t.dur);
@@ -2096,6 +2657,7 @@ function drawWarnings() {
   }
 }
 function drawWorldUI() {
+  drawIslandLabels();
   // building labels & health bars
   for (const b of S.buildings) {
     const y = b.y - b.h / 2 - 14, r = b.hp / b.max;
@@ -2137,7 +2699,7 @@ function drawWorldUI() {
     ctx.save(); ctx.strokeStyle = '#5ad2ff'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]); ctx.lineDashOffset = -S.time * 20;
     if (s === S.carrier) { rr(ctx, s.x - 96, s.y - 28, 192, 56, 6); ctx.stroke(); }
     else { ctx.beginPath(); ctx.arc(s.x, s.y, 38, 0, TAU); ctx.stroke(); }
-    if (s.type === 'ciws') { ctx.fillStyle = 'rgba(90,210,255,0.05)'; ctx.beginPath(); ctx.arc(s.x, s.y - 6, UNIT.ciws.range, 0, TAU); ctx.fill(); ctx.strokeStyle = 'rgba(90,210,255,0.35)'; ctx.stroke(); }
+    if (s.type === 'ciws') { ctx.fillStyle = 'rgba(90,210,255,0.05)'; ctx.beginPath(); ctx.arc(s.x, s.y - 6, ciwsRange(), 0, TAU); ctx.fill(); ctx.strokeStyle = 'rgba(90,210,255,0.35)'; ctx.stroke(); }
     if (s.type === 'patriot') { ctx.strokeStyle = 'rgba(90,210,255,0.22)'; ctx.beginPath(); ctx.arc(s.x, s.y, UNIT.patriot.range, 0, TAU); ctx.stroke(); }
     ctx.restore();
   }
@@ -2145,7 +2707,7 @@ function drawWorldUI() {
   const hi = padAt(ui.mx, ui.my);
   if (hi >= 0 && S.pads[hi] && S.pads[hi].type === 'ciws' && S.pads[hi] !== s) {
     const u = S.pads[hi]; ctx.strokeStyle = 'rgba(90,210,255,0.25)'; ctx.lineWidth = 1; ctx.setLineDash([4, 6]);
-    ctx.beginPath(); ctx.arc(u.x, u.y - 6, UNIT.ciws.range, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(u.x, u.y - 6, ciwsRange(), 0, TAU); ctx.stroke(); ctx.setLineDash([]);
   }
   // patriot manual-target hover
   if (s && s.type === 'patriot') {
@@ -2207,8 +2769,8 @@ function drawHUD() {
   // treasury
   lab(16, 16, 'TREASURY');
   ctx.textAlign = 'left'; ctx.font = '700 22px ' + MONO;
-  ctx.fillStyle = S.treasury < 0 ? (blink ? '#ff4d4d' : '#ff9a8f') : '#7cffb2';
-  ctx.fillText(money(S.treasury), 16, 41);
+  ctx.fillStyle = S.sandbox ? '#ffd36b' : S.treasury < 0 ? (blink ? '#ff4d4d' : '#ff9a8f') : '#7cffb2';
+  ctx.fillText(treasuryText(), 16, 41);
   // income
   lab(152, 16, 'INCOME / 5s');
   ctx.font = '700 15px ' + MONO; ctx.fillStyle = '#bfe9ff'; ctx.fillText('+' + money(incomeRate()), 152, 36);
@@ -2255,10 +2817,11 @@ function drawHUD() {
     }
     ctx.restore();
   });
-  if (S.treasury < 0 && S.mode !== 'menu') {
-    ctx.fillStyle = blink ? 'rgba(160,20,20,0.85)' : 'rgba(110,10,10,0.85)'; ctx.fillRect(W / 2 - 190, HUD_H + 4, 380, 20);
+  if (S.treasury < 0 && S.mode !== 'menu' && !S.sandbox) {
+    const lim = atCreditLimit();
+    ctx.fillStyle = blink ? 'rgba(160,20,20,0.85)' : 'rgba(110,10,10,0.85)'; ctx.fillRect(W / 2 - (lim ? 280 : 190), HUD_H + 4, lim ? 560 : 380, 20);
     ctx.fillStyle = '#fff'; ctx.font = '800 12px ' + FONT; ctx.textAlign = 'center';
-    ctx.fillText(`IN DEBT: BANKRUPT AT ${money(CFG.bankruptLimit)}`, W / 2, HUD_H + 18);
+    ctx.fillText(lim ? 'CREDIT LIMIT REACHED: WEAPONS ON HOLD UNTIL INCOME ARRIVES' : `IN DEBT · CREDIT LIMIT ${money(CFG.bankruptLimit)}`, W / 2, HUD_H + 18);
   }
 }
 
@@ -2271,6 +2834,8 @@ function render() {
   ctx.drawImage(bgCanvas, 0, 0, W, H);
   drawAmbient();
   drawCarrier();
+  drawDestroyer();
+  drawIslands();
   drawScorches();
   drawBunkers();
   drawLaunchers();
@@ -2282,6 +2847,8 @@ function render() {
   drawBombs(false);
   drawParticles(false);
   drawJets();
+  drawOpsAir(false);
+  drawAssaults(false);
   drawGlows();
   drawParticles(true);
   drawWarnings();
@@ -2325,7 +2892,14 @@ function update(dt) {
   updLaunchers(dt);
   if (S.mode !== 'over') updateUnits(dt);
   updBunkers(dt);
-  updThreats(dt); updMissiles(dt); updRockets(dt); updJets(dt); updBombs(dt);
+  updThreats(dt); updMissiles(dt); updRockets(dt); updJets(dt); updBombs(dt); updReapers(dt); updRaids(dt); updTomahawks(dt); updAssaults(dt);
+  for (const k in S.opsCd) S.opsCd[k] = Math.max(0, S.opsCd[k] - dt);
+  if (S.up.civil) { for (const b of S.buildings) if (b.hp > 0 && b.hp < b.max) b.hp = Math.min(b.max, b.hp + dt * 0.5); for (const is of S.islands) if (is.owner === 'player') is.hp = Math.min(is.max, is.hp + dt * 0.5); }
+  if (S.up.awacs) {
+    S.awacsA += dt * 0.12; S.awacsPing -= dt;
+    if (S.awacsPing <= 0) { S.awacsPing = 2.5; P({ k: 'ring', add: true, c: 'rgb(90,220,255)', w: 2, x: 640 + Math.cos(S.awacsA) * 330, y: 330 + Math.sin(S.awacsA) * 120, life: 2, s0: 10, s1: 320, a0: 0.25 }); }
+  }
+  if (S.sandbox) S.treasury = 1e12;
   if (S.mode === 'prep') { S.prepT -= dt; if (S.prepT <= 0) startWave(S.wave + 1); }
   else if (S.mode === 'wave') { S.waveT += dt; spawnFromQueue(); if (!S.queue.length && !S.threats.length) waveCleared(); }
   if (S.mode === 'prep' || S.mode === 'wave') { updIncome(dt); checkLose(); }
@@ -2364,6 +2938,8 @@ function frame(now) {
 }
 
 // ============================== BOOT ==============================
+document.getElementById('btnCommand').addEventListener('click', () => { SFX.init(); SFX.click(); if (S.mode !== 'prep' && S.mode !== 'wave') return; if (ui.panel && ui.panel.kind === 'command') closePanel(); else openCommand(); });
+document.getElementById('btnCommand').addEventListener('pointerdown', (e) => e.stopPropagation());
 document.getElementById('demoPlay').addEventListener('click', () => { SFX.init(); stopDemo(true); });
 document.getElementById('demoExit').addEventListener('click', () => stopDemo(false));
 elDemoSound.addEventListener('click', () => { const was = SFX.ready; SFX.init(); if (!was) { if (SFX.muted) toggleMute(); } else toggleMute(); });
@@ -2374,7 +2950,7 @@ ui.lastInput = performance.now();
 S = newState();
 placeBunkers();
 for (const L of S.launchers) placeLauncher(L);
-ICONS = { ciws: unitIcon('ciws'), patriot: unitIcon('patriot'), himars: unitIcon('himars') };
+ICONS = { ciws: unitIcon('ciws'), patriot: unitIcon('patriot'), himars: unitIcon('himars'), laser: unitIcon('laser') };
 resize();
 requestAnimationFrame(frame);
 

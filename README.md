@@ -8,11 +8,15 @@ A 2D tactical browser game about the economics of air defense: a mix of missile 
 - **Deploy.** Click a concrete pad on your coast to build a CIWS (cheap drone killer), a Patriot battery (kills anything, $4M a shot) or a HIMARS truck.
 - **Control the burn.** Click a Patriot to switch between AUTO (all threats) and HEAVY ONLY, so it doesn't fire $4M missiles at $20K drones and $5K decoys.
 - **Hit back.** When an enemy launcher fires, it shows a red ping for 10 seconds. Click it for a HIMARS salvo, or select your aircraft carrier and click it to send an F-35 precision strike ($7M). Orange pings are underground missile bases: only an F-35 bunker buster ($20M) can destroy them, and each one destroyed cuts ballistic missiles for the rest of the war.
+- **Command Center** (`C` or the COMMAND button). Buy upgrades (AWACS, CIWS radar, Patriot PAC-3, high-energy laser, civil defense) and launch preemptive operations (MQ-9 Reaper patrol, special forces raid, Tomahawk strike). Each needs a minimum amount of money on hand before you can authorize it.
+- **Islands.** Click an island in the strait to seize it with marines. Each one held pays $250K to $400K every 5 seconds and gets its own build pad. Enemy drones will try to retake it, and enemy-held outposts launch drones with less warning.
+- **Sandbox mode.** Choose it on the title screen, or type `money` during a game, for an unlimited budget. The burn tracker still counts the real cost.
 
 **Win:** survive 10 waves, or destroy all 5 launchers.
-**Lose:** all 3 coastal buildings are destroyed, or your debt goes past −$20M.
+**Lose:** all 3 coastal buildings are destroyed.
+**Credit limit:** you can go up to $20M into debt. Past that, weapons hold fire and nothing new can be bought until income brings you back above the limit.
 
 ## AI demo mode
-Click **WATCH AI DEMO** on the title screen (it also starts by itself after 25 seconds). An AI commander plays real games with a visible cursor. It builds defenses, fixes its own mistakes, hunts launchers with HIMARS and F-35s, and drops bunker busters, while a camera director cuts to the best moments. Each game uses a different strategy (Balanced, Hunter or Shield), then the next game starts. Press **PLAY THE GAME** to take over, or `Esc` to go back to the title.
+Click **WATCH AI DEMO** on the title screen (it also starts by itself after 25 seconds). An AI commander plays real games with a visible cursor. It builds defenses, fixes its own mistakes, hunts launchers with HIMARS and F-35s, and drops bunker busters, while a camera director cuts to the best moments. Each game uses a different strategy (Balanced, Hunter, Arsenal with an unlimited budget, or Shield), then the next game starts. Press **PLAY THE GAME** to take over, or `Esc` to go back to the title.
 
 Keys: `M` mute · `P` pause · `N` next wave · `Esc` close menu or leave the demo
